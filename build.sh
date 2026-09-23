@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the release binaries and packages both app bundles into dist/.
+# Builds the release binaries and packages both app bundles into .build/apps/.
 #
 # Requires only the Command Line Tools (no Xcode, no extra dependencies):
 # `swift build -c release` plus ad-hoc `codesign -s -`.
@@ -14,8 +14,8 @@ echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG"
 echo "==> binaries in $BIN_DIR"
 
-rm -rf dist
-mkdir -p dist
+rm -rf .build/apps
+mkdir -p .build/apps
 
 write_plist() {
   # $1 = path, $2 = executable, $3 = bundle id, $4 = bundle name
@@ -37,7 +37,9 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
@@ -59,12 +61,13 @@ copy_licenses() {
   cp -R LICENSES "$resources/LICENSES"
   cp docs/UPSTREAM.md "$resources/UPSTREAM.md"
   cp docs/INSTALL.zh-CN.md "$resources/INSTALL.zh-CN.md"
+  cp Assets/AppIcon.icns Assets/StatusIconTemplate.png "$resources/"
   printf 'Corresponding source (GPL-3.0-or-later):\nhttps://github.com/JonathanChan-geek/EncoX3-Mac/tree/v%s\n' "$APP_VERSION" > "$resources/SOURCE.txt"
 }
 
 package_app() {
   # $1 = app name, $2 = source binary, $3 = bundle id
-  local app="dist/$1.app"
+  local app=".build/apps/$1.app"
   mkdir -p "$app/Contents/MacOS"
   cp "$BIN_DIR/$2" "$app/Contents/MacOS/$2"
   write_plist "$app/Contents/Info.plist" "$2" "$3" "$1"
@@ -86,11 +89,11 @@ package_app "Enco Probe" encoctl local.nigo.EncoX3Probe
 
 echo
 echo "done."
-echo "  open 'dist/Enco X3.app'                                # 菜单栏应用（首次启动自动展开面板）"
+echo "  open '.build/apps/Enco X3.app'                                # 菜单栏应用（首次启动自动展开面板）"
 echo "  EncoMenu --diagnostics                                 # 附：最小状态日志到 stderr"
-echo "  'dist/Enco Probe.app/Contents/MacOS/encoctl' probe --seconds 20"
-echo "  'dist/Enco Probe.app/Contents/MacOS/encoctl' cycle-anc --journal /绝对路径/anc-restore.json"
-echo "  'dist/Enco Probe.app/Contents/MacOS/encoctl' cycle-audio --journal /绝对路径/audio-restore.json"
+echo "  '.build/apps/Enco Probe.app/Contents/MacOS/encoctl' probe --seconds 20"
+echo "  '.build/apps/Enco Probe.app/Contents/MacOS/encoctl' cycle-anc --journal /绝对路径/anc-restore.json"
+echo "  '.build/apps/Enco Probe.app/Contents/MacOS/encoctl' cycle-audio --journal /绝对路径/audio-restore.json"
 echo
 echo "降噪模式（关闭/通透/智能/深度/中度/轻度/自适应通透）与 EQ 预设/空间音效均已实机验收，默认可用；"
 echo "--enable-verified-anc、--enable-audio 仅为兼容保留，无实际效果。"

@@ -21,4 +21,8 @@ audioVerificationChecks(checker)
 print("")
 eqDuplicateIDChecks(checker)
 
-exit(checker.summary())
+Task { @MainActor in
+    await asyncTransactionChecks(checker)
+    exit(checker.summary())
+}
+RunLoop.main.run()

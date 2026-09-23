@@ -27,6 +27,12 @@
 
 ## 界面
 
+<img src="Assets/AppIcon.png" alt="Enco X3 应用图标" width="128">
+
+0.2.2 加入正式应用图标及菜单栏耳塞图标；GUI 蓝牙操作采用异步回调与超时定时器，连接和查询期间不阻塞面板。开发 App 产物保存在隐藏的 `.build/apps/`，避免与安装版一起出现在 Spotlight。
+
+本机最终版启动实测：面板显示调用完成 0.452 秒，控制通道打开 2.834 秒，完整状态读回 3.384 秒。耗时取决于系统蓝牙初始化、权限和耳机状态，不是所有机器的保证值。见 [0.2.2 验收记录](docs/evidence/2026-09-23-v022-acceptance.md)。
+
 0.2 版参考 Apple AirPods 与 HeyMelody 的信息层级重新设计：耳机/盒子电量展示、四模式图标选择、降噪强度分段控件、整行音效菜单及紧凑双设备列表。界面跟随系统深浅外观。设计研究和来源见 [视觉设计记录](docs/design/2026-09-23-ui-redesign.md)。
 
 ## 使用
@@ -46,12 +52,12 @@
 ```bash
 swift run EncoCoreChecks   # 独立的离线协议/恢复逻辑校验
 ./build.sh                # Release 构建、打包、ad-hoc 签名与校验
-./scripts/install.sh      # 安装到 ~/Applications
+./scripts/install.sh      # 仅安装主应用到 /Applications；--with-probe 可选诊断工具
 ./scripts/package-release.sh # 构建 DMG / ZIP / SHA256SUMS 到 release/v<版本>/
-open "$HOME/Applications/Enco X3.app"
+open "/Applications/Enco X3.app"
 ```
 
-产物为 `dist/Enco X3.app` 和 `dist/Enco Probe.app`。仅本地 ad-hoc 签名，未做 Developer ID 签名或 Apple 公证。本机只有 CLT、缺少 XCTest，因此采用无依赖 executable checks；不声称 `swift test` 已通过。
+产物为 `.build/apps/Enco X3.app` 和 `.build/apps/Enco Probe.app`。仅本地 ad-hoc 签名，未做 Developer ID 签名或 Apple 公证。本机只有 CLT、缺少 XCTest，因此采用无依赖 executable checks；不声称 `swift test` 已通过。
 
 可选 `--diagnostics` 在 stderr 输出最小连接/状态日志。旧参数 `--enable-verified-anc`、`--enable-audio` 仅兼容保留，已不影响功能开关。应用与 Probe 不宜同时占用控制通道。
 
@@ -59,16 +65,16 @@ open "$HOME/Applications/Enco X3.app"
 
 ```bash
 # 只读：配对设备和缓存 SDP 枚举
-"dist/Enco Probe.app/Contents/MacOS/encoctl" inspect
+".build/apps/Enco Probe.app/Contents/MacOS/encoctl" inspect
 
 # 只读：推荐通过含蓝牙权限说明的 app 启动
-open -W -n "dist/Enco Probe.app" --stdout /tmp/enco-probe.txt \
+open -W -n ".build/apps/Enco Probe.app" --stdout /tmp/enco-probe.txt \
   --stderr /tmp/enco-probe-errors.txt --args probe --seconds 20
 
 # 写测试：先退出菜单栏应用，保存原值、逐项切换、最后恢复并核验
-open -W -n "dist/Enco Probe.app" --stdout /tmp/enco-anc.txt \
+open -W -n ".build/apps/Enco Probe.app" --stdout /tmp/enco-anc.txt \
   --args cycle-anc --journal /tmp/enco-anc-restore.json
-open -W -n "dist/Enco Probe.app" --stdout /tmp/enco-audio.txt \
+open -W -n ".build/apps/Enco Probe.app" --stdout /tmp/enco-audio.txt \
   --args cycle-audio --journal /tmp/enco-audio-restore.json
 ```
 

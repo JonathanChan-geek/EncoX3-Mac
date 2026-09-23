@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 ./build.sh
 release_version="$(cat VERSION)"
-release_arch="$(lipo -archs 'dist/Enco X3.app/Contents/MacOS/EncoMenu')"
+release_arch="$(lipo -archs '.build/apps/Enco X3.app/Contents/MacOS/EncoMenu')"
 case "$release_arch" in
   arm64|x86_64) ;;
   *) echo "Unsupported release architecture: $release_arch" >&2; exit 1 ;;
@@ -16,7 +16,7 @@ mkdir -p "$release_dir"
 stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/encox3-package.XXXXXX")"
 trap 'rm -rf "$stage_dir"' EXIT
 
-ditto 'dist/Enco X3.app' "$stage_dir/Enco X3.app"
+ditto '.build/apps/Enco X3.app' "$stage_dir/Enco X3.app"
 ln -s /Applications "$stage_dir/Applications"
 cp docs/INSTALL.zh-CN.md "$stage_dir/安装说明.md"
 cp LICENSE "$stage_dir/LICENSE"
@@ -24,7 +24,7 @@ codesign --verify --deep --strict "$stage_dir/Enco X3.app"
 
 hdiutil create -ov -volname "Enco X3 ${release_version}" \
   -srcfolder "$stage_dir" -fs HFS+ -format UDZO "$release_dir/$release_name.dmg"
-ditto -c -k --sequesterRsrc --keepParent 'dist/Enco X3.app' "$release_dir/$release_name.zip"
+ditto -c -k --sequesterRsrc --keepParent '.build/apps/Enco X3.app' "$release_dir/$release_name.zip"
 cp docs/INSTALL.zh-CN.md "$release_dir/INSTALL.zh-CN.md"
 (
   cd "$release_dir"

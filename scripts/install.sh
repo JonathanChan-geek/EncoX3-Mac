@@ -1,29 +1,32 @@
 #!/bin/bash
-# Installs the built apps into ~/Applications (per-user only; never system-wide)
+# Installs the built apps into /Applications (one canonical installation location)
 # and verifies the bundles exist and are signed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ ! -d dist ]; then
-  echo "dist/ 不存在，先运行 ./build.sh" >&2
+if [ ! -d .build/apps ]; then
+  echo ".build/apps/ 不存在，先运行 ./build.sh" >&2
   exit 1
 fi
 
-mkdir -p "$HOME/Applications"
-for app in "dist/Enco X3.app" "dist/Enco Probe.app"; do
+mkdir -p "/Applications"
+apps=(".build/apps/Enco X3.app")
+if [[ "${1:-}" == "--with-probe" ]]; then apps+=(".build/apps/Enco Probe.app"); fi
+for app in "${apps[@]}"; do
   if [ ! -d "$app" ]; then
     echo "跳过（未找到）: $app" >&2
     continue
   fi
-  rm -rf "$HOME/Applications/$(basename "$app")"
-  cp -R "$app" "$HOME/Applications/"
-  echo "已安装: $HOME/Applications/$(basename "$app")"
+  rm -rf "/Applications/$(basename "$app")"
+  ditto "$app" "/Applications/$(basename "$app")"
+  codesign --verify --deep --strict "/Applications/$(basename "$app")"
+  echo "已安装: /Applications/$(basename "$app")"
 done
 
 echo
 echo "校验签名:"
-codesign --verify --deep --strict "$HOME/Applications/Enco X3.app" && echo "  Enco X3.app 签名有效"
-codesign --verify --deep --strict "$HOME/Applications/Enco Probe.app" && echo "  Enco Probe.app 签名有效"
+codesign --verify --deep --strict "/Applications/Enco X3.app" && echo "  Enco X3.app 签名有效"
+
 
 cat <<'NOTE'
 

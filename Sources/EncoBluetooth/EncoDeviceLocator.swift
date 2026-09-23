@@ -272,12 +272,14 @@ public enum RunLoopPump {
 
 /// Async SDP query completion target.
 public final class SDPQueryWaiter: NSObject, IOBluetoothDeviceAsyncCallbacks {
+    public var onComplete: ((IOReturn) -> Void)?
     public private(set) var status: IOReturn?
     public private(set) var finished = false
 
     public func sdpQueryComplete(_ device: IOBluetoothDevice!, status: IOReturn) {
         self.status = status
         finished = true
+        onComplete?(status)
     }
 
     public func connectionComplete(_ device: IOBluetoothDevice!, status: IOReturn) {}

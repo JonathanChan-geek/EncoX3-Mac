@@ -2,12 +2,14 @@ import AppKit
 import SwiftUI
 import EncoCore
 import EncoBluetooth
+import IOBluetooth
 
 /// Owns the status item, the popover and all device state.
 ///
 /// The SwiftUI view never holds state: after every change the manager rebuilds a
 /// `PanelSnapshot` and reassigns `hosting.rootView`, which is what makes the panel work
 /// without observation macros.
+@MainActor
 final class MenuManager: NSObject, NSPopoverDelegate {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
@@ -40,12 +42,15 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private var warmupTimer: Timer?
     private var warmupNotice: String?
     private var stopped = false
-    private var backoffSteps: [TimeInterval] = [5, 10, 20, 30]
+    private var backoffSteps: [TimeInterval] = [1, 3, 10, 20]
     private var backoffIndex = 0
 
     private let pollInterval: TimeInterval = 10
-    private let advancedRefreshInterval: TimeInterval = 15
-    private let openTimeout: TimeInterval = 12
+    private let advancedRefreshInterval: TimeInterval = 8
+    private let openTimeout: TimeInterval = 8
+    private var generation = 0
+    private var refreshServices = false
+    private let launchedAt = Date()
 
     init(appearance: PanelAppearance, diagnosticsEnabled: Bool) {
         self.appearance = appearance
@@ -66,7 +71,9 @@ final class MenuManager: NSObject, NSPopoverDelegate {
 
     func start() {
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Enco X3")
+            button.image = NSImage(named: "StatusIconTemplate")
+                ?? NSImage(systemSymbolName: "earbuds", accessibilityDescription: "Enco X3")
+            button.image?.size = NSSize(width: 18, height: 18)
             button.image?.isTemplate = true
             button.action = #selector(statusItemClicked(_:))
             button.target = self
@@ -100,6 +107,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.showPopover()
         }
+        render()
         beginBluetoothWarmup()
     }
 
@@ -112,6 +120,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private func beginBluetoothWarmup() {
         guard !warmupStarted, !stopped else { return }
         warmupStarted = true
+        connectionText = "准备连接"
+        render()
         diag("warmup started")
 
         warmupTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
@@ -141,6 +151,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         guard !popover.isShown, let button = statusItem.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        diag("panel visible")
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
@@ -239,7 +250,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     /// addresses, names or payloads, and nothing leaves the machine.
     func diag(_ message: String) {
         guard diagnosticsEnabled else { return }
-        FileHandle.standardError.write(Data("EncoMenu [diag] \(message)\n".utf8))
+        let elapsed = String(format: "%.3f", Date().timeIntervalSince(launchedAt))
+        FileHandle.standardError.write(Data("EncoMenu [\(elapsed)s] \(message)\n".utf8))
     }
 
     // MARK: - Menu bar plumbing
@@ -271,88 +283,103 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     // MARK: - Connection
 
     private func reconnectNow() {
-        // Everything below runs on the main run loop and may query device state, so it waits for
-        // the framework warm-up. Wake notifications pass through the same gate.
-        guard ready, !stopped else {
-            diag("reconnect deferred: warmup not complete")
-            return
-        }
+        guard ready, !stopped, !isConnecting else { return }
+        Task { @MainActor [weak self] in await self?.connect() }
+    }
+
+    private func connect() async {
+        guard ready, !stopped, !isConnecting else { return }
         reconnectTimer?.invalidate()
         reconnectTimer = nil
-        // Tear the previous session down completely before opening a new one, so a wake
-        // notification cannot leave two transports (or two channels) alive.
         teardownSession(bumpBackoff: false)
-        guard let device = EncoDeviceLocator.target() else {
+        let token = generation
+        isConnecting = true
+        connectionText = "查找耳机"
+        clearError()
+        render()
+        // Discovery may invoke system_profiler. It must never run on AppKit's thread.
+        // Only the address value crosses back; no Bluetooth object is shared across threads.
+        let address: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: EncoDeviceLocator.target()?.addressString)
+            }
+        }
+        guard !stopped, generation == token else { return }
+        guard let address, let device = IOBluetoothDevice(addressString: address) else {
+            isConnecting = false
             connectionText = "未连接"
-            connectionWarning = EncoDeviceLocator.pairedDevices().isEmpty
-                ? "未读取到蓝牙设备：可能缺少蓝牙权限"
-                : "未找到已连接的 \(EncoDeviceLocator.targetName)"
-            showSettingsButton = EncoDeviceLocator.pairedDevices().isEmpty
-            setError("未找到已连接的耳机；请先在系统蓝牙中连接")
+            showSettingsButton = true
             clearDeviceState()
-            render()
             scheduleReconnect()
             return
         }
-
-        isConnecting = true
+        showSettingsButton = false
         let transport = RFCOMMTransport(device: device)
-        let transactions = TransactionController(transport: transport, defaultTimeout: 4)
-        // [weak transactions] breaks the transport -> closure -> transactions -> transport cycle.
-        transport.onState = { [weak self] state in
-            guard let self else { return }
-            switch state {
+        let transactions = TransactionController(transport: transport, defaultTimeout: 2)
+        self.transport = transport
+        self.transactions = transactions
+        transport.onLog = { [weak self] in self?.diag($0) }
+        transport.onState = { [weak self] status in
+            guard let self, self.generation == token else { return }
+            switch status {
+            case .resolving: self.connectionText = "发现服务"
+            case .opening: self.connectionText = "正在连接"
             case .closed, .failed:
-                self.diag("channel=\(state)")
+                // An in-progress open has one failure owner: the catch below. Never arm two retries.
+                guard !self.isConnecting else { return }
+                self.transactions?.cancel()
                 self.connectionText = "未连接"
-                self.connectionWarning = "连接已断开，等待重连…"
                 self.clearDeviceState()
-                self.render()
                 self.scheduleReconnect()
-            default:
-                break
+            default: break
             }
+            self.render()
         }
         transport.onFrame = { [weak self, weak transactions] frame in
-            guard let self else { return }
+            guard let self, self.generation == token else { return }
             ResponseParser.apply(frame, to: &self.state)
             _ = transactions?.accept(frame)
             self.render()
         }
         do {
-            try transport.open(sdpTimeout: 10, openTimeout: openTimeout)
+            try await transport.openAsync(refreshServices: refreshServices, openTimeout: openTimeout)
         } catch {
+            guard !stopped, generation == token else { return }
             transport.onFrame = nil
             transport.onState = nil
+            transactions.cancel()
             transport.close()
+            self.transport = nil
+            self.transactions = nil
             isConnecting = false
+            refreshServices = true
             connectionText = "未连接"
-            connectionWarning = nil
             diag("open failed: \(error)")
-            setError("连接失败，稍后自动重试")
             clearDeviceState()
-            render()
             scheduleReconnect()
             return
         }
-        self.transport = transport
-        self.transactions = transactions
+        guard !stopped, generation == token else { return }
         isConnecting = false
+        refreshServices = false
         backoffIndex = 0
         connectionText = "已连接"
-        connectionWarning = nil
         clearError()
-        diag("channel=open id=\(transport.channelID.map(String.init) ?? "?")")
-        // Same opening sequence as the probe path that works on this device: capability query
-        // first (it is what brings the notifications up), then the first read of everything.
-        _ = transactions.query(cmd: EncoCommand.capability.rawValue)
+        diag("channel=open id=\(transport.channelID.map(String.init) ?? "?") elapsed=\(String(format: "%.3f", Date().timeIntervalSince(launchedAt)))s")
+        isWorking = true
+        render()
+        _ = await transactions.queryAsync(cmd: EncoCommand.capability.rawValue)
+        guard !stopped, generation == token else { return }
+        isWorking = false
         startPolling()
-        refresh(withQueries: true, force: true)
+        await refreshAsync(withQueries: true, force: true)
     }
 
     /// Closes this app's own control channel and drops every callback. Never touches the
     /// system pairing or the audio connection.
     private func teardownSession(bumpBackoff: Bool) {
+        generation += 1
+        transactions?.cancel()
         pollTimer?.invalidate()
         pollTimer = nil
         if let transport {
@@ -388,16 +415,18 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         setError("等待重连（\(Int(delay))s）")
         render()
         reconnectTimer?.invalidate()
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+        reconnectTimer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             self?.reconnectNow()
         }
+        RunLoop.main.add(reconnectTimer!, forMode: .common)
     }
 
     private func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+        pollTimer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.refresh(withQueries: true)
         }
+        RunLoop.main.add(pollTimer!, forMode: .common)
     }
 
     private func clearDeviceState() {
@@ -410,16 +439,20 @@ final class MenuManager: NSObject, NSPopoverDelegate {
 
     // MARK: - Queries and writes
 
-    /// Basic values (battery, noise reduction) every 10s; the advanced block every ~20s (15s threshold on a 10s timer); a
+    /// All status values refresh about every 10s, including while a menu is tracking; a
     /// forced refresh reads everything. Values only ever come from received frames, never from
     /// an optimistic echo of our own write.
     private func refresh(withQueries: Bool, force: Bool = false) {
+        Task { @MainActor [weak self] in await self?.refreshAsync(withQueries: withQueries, force: force) }
+    }
+
+    private func refreshAsync(withQueries: Bool, force: Bool = false) async {
         guard !isWorking else { return }
         guard let transactions, let transport, transport.state == .open else { return }
         isWorking = true
+        let token = generation
         defer {
-            isWorking = false
-            render()
+            if token == generation { isWorking = false; render() }
         }
 
         guard withQueries else { return }
@@ -427,26 +460,31 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         // A periodic tick must never erase a write failure the user should still see: only the
         // explicit user paths (manual refresh, a new write, a successful reconnect) clear it.
 
-        _ = transactions.query(cmd: EncoCommand.queryBattery.rawValue)
-        _ = transactions.query(
+        _ = await transactions.queryAsync(cmd: EncoCommand.queryBattery.rawValue)
+        _ = await transactions.queryAsync(
             cmd: EncoCommand.queryNoiseReduction.rawValue,
             payload: EncoPayload.noiseReductionCurrent
         )
-        if state.productID == nil { _ = transactions.query(cmd: EncoCommand.queryProductID.rawValue) }
+        if state.productID == nil { _ = await transactions.queryAsync(cmd: EncoCommand.queryProductID.rawValue) }
 
+        guard generation == token, !stopped else { return }
         let now = Date()
         let advancedAge = lastAdvancedQueryAt.map { now.timeIntervalSince($0) } ?? .infinity
         if force || advancedAge >= advancedRefreshInterval {
             lastAdvancedQueryAt = now
-            _ = transactions.query(cmd: EncoCommand.queryEqualizer.rawValue)
-            _ = transactions.query(cmd: EncoCommand.querySpatial.rawValue)
-            _ = transactions.query(cmd: EncoCommand.queryEqAll.rawValue, payload: EncoPayload.eqAllQuery)
-            _ = transactions.query(cmd: EncoCommand.queryMultiConnect.rawValue)
+            _ = await transactions.queryAsync(cmd: EncoCommand.queryEqualizer.rawValue)
+            _ = await transactions.queryAsync(cmd: EncoCommand.querySpatial.rawValue)
+            _ = await transactions.queryAsync(cmd: EncoCommand.queryEqAll.rawValue, payload: EncoPayload.eqAllQuery)
+            _ = await transactions.queryAsync(cmd: EncoCommand.queryMultiConnect.rawValue)
             diag("refresh pid=\(state.productID != nil) anc=\(state.noiseReductionRawValue != nil) eq=\(state.equalizerPresetID.map(String.init) ?? "-") spatial=\(state.spatialType.map(String.init) ?? "-") eqList=\(state.equalizerPresets.count) devices=\(state.listedConnectedDevices.count)")
         }
     }
 
     private func performWrite(bitmap: UInt32) {
+        Task { @MainActor [weak self] in await self?.performWriteAsync(bitmap: bitmap) }
+    }
+
+    private func performWriteAsync(bitmap: UInt32) async {
         guard let transactions else {
             setError("未连接")
             render()
@@ -460,12 +498,14 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         isWorking = true
         clearError()
         render()
-        let result = transactions.setNoiseReduction(bitmap: bitmap)
-        isWorking = false
+        let token = generation
+        defer { if generation == token { isWorking = false; render() } }
+        let result = await transactions.setNoiseReductionAsync(bitmap: bitmap)
+        guard generation == token, !stopped else { return }
 
         applyWriteResult(describeWriteResult(result, label: "降噪", target: result.targetRaw), result: result)
         // Re-read rather than assuming the device took the value.
-        _ = transactions.query(
+        _ = await transactions.queryAsync(
             cmd: EncoCommand.queryNoiseReduction.rawValue,
             payload: EncoPayload.noiseReductionCurrent
         )
@@ -475,7 +515,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     /// Single source of truth for the audio gate, used by the panel and by the setters so the
     /// button state and the actual write path cannot disagree.
     private var audioGate: (enabled: Bool, reason: String?) {
-        guard !isWorking else { return (false, "正在处理上一个请求") }
+        guard !isWorking, !isConnecting else { return (false, "正在处理上一个请求") }
         guard let transport, transport.state == .open else { return (false, "未连接") }
         guard state.productID == X3Profile.productID else { return (false, "尚未确认耳机型号") }
         guard state.isFresh(state.equalizerUpdatedAt), state.isFresh(state.spatialUpdatedAt) else {
@@ -487,6 +527,10 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private var canWriteAudio: Bool { audioGate.enabled }
 
     private func performEqualizerWrite(id: Int) {
+        Task { @MainActor [weak self] in await self?.performEqualizerWriteAsync(id: id) }
+    }
+
+    private func performEqualizerWriteAsync(id: Int) async {
         guard let transactions else {
             setError("未连接")
             render()
@@ -506,14 +550,20 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         isWorking = true
         clearError()
         render()
-        let result = transactions.setEqualizer(id: id)
-        isWorking = false
+        let token = generation
+        defer { if generation == token { isWorking = false; render() } }
+        let result = await transactions.setEqualizerAsync(id: id)
+        guard generation == token, !stopped else { return }
         applyWriteResult(describeWriteResult(result, label: "EQ", target: UInt32(id)), result: result)
-        _ = transactions.query(cmd: EncoCommand.queryEqualizer.rawValue)
+        _ = await transactions.queryAsync(cmd: EncoCommand.queryEqualizer.rawValue)
         render()
     }
 
     private func performSpatialWrite(type: Int) {
+        Task { @MainActor [weak self] in await self?.performSpatialWriteAsync(type: type) }
+    }
+
+    private func performSpatialWriteAsync(type: Int) async {
         guard let transactions else {
             setError("未连接")
             render()
@@ -527,10 +577,12 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         isWorking = true
         clearError()
         render()
-        let result = transactions.setSpatial(type: type)
-        isWorking = false
+        let token = generation
+        defer { if generation == token { isWorking = false; render() } }
+        let result = await transactions.setSpatialAsync(type: type)
+        guard generation == token, !stopped else { return }
         applyWriteResult(describeWriteResult(result, label: "空间音效", target: UInt32(type)), result: result)
-        _ = transactions.query(cmd: EncoCommand.querySpatial.rawValue)
+        _ = await transactions.queryAsync(cmd: EncoCommand.querySpatial.rawValue)
         render()
     }
 
@@ -563,7 +615,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     /// by the device with an exact readback (docs/evidence/2026-09-23-anc-verified.md), so no
     /// opt-in flag is needed; PID, channel, freshness and busy still gate it.
     private var noiseGate: (enabled: Bool, reason: String?) {
-        guard !isWorking else { return (false, "正在处理上一个请求") }
+        guard !isWorking, !isConnecting else { return (false, "正在处理上一个请求") }
         guard let transport, transport.state == .open else { return (false, "未连接") }
         guard state.productID == X3Profile.productID else { return (false, "尚未确认耳机型号") }
         guard state.noiseReductionIsFresh() else { return (false, "读数待刷新") }
@@ -719,7 +771,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             devices: devices,
             lastUpdateText: Self.footerTimestamp(state: state).map { "最近更新 \(TimestampText.clock($0))" } ?? "尚无数据",
             errorLine: errorLine ?? warmupNotice,
-            busy: isWorking,
+            busy: isWorking || isConnecting,
             showSettingsButton: showSettingsButton
         )
         renderIntoHost()
