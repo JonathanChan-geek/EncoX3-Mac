@@ -496,9 +496,10 @@ private enum ListeningOutput {
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr else { return false }
         address.mSelector = kAudioObjectPropertyName
-        var name: CFString = "" as CFString
-        size = UInt32(MemoryLayout<CFString>.size)
+        var name: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr else { return false }
+        guard let name = name?.takeRetainedValue() else { return false }
         let normalized = (name as String).lowercased().replacingOccurrences(of: " ", with: "")
         return normalized.contains("encox3")
     }

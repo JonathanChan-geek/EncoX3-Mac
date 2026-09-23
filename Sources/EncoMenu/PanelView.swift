@@ -96,6 +96,8 @@ struct PanelView: View {
 
     private var moreMenu: some View {
         Menu {
+            Button("日常体验与快捷键…") { actions.onExperience() }
+            Divider()
             Button("刷新") { actions.onRefresh() }
             Toggle("连接时显示电量卡片", isOn: Binding(
                 get: { snapshot.connectionNoticesEnabled },

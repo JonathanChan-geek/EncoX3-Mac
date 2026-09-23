@@ -16,6 +16,16 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private let connectionNotice = ConnectionNotice()
     private var noticePolicy = ConnectionNoticePolicy()
     private var connectionNoticesEnabled = UserDefaults.standard.object(forKey: "connectionNoticesEnabled") as? Bool ?? true
+    private let experienceWindow = ExperienceWindow()
+    private let hotKeys = GlobalHotKeys()
+    private var currentDeviceID = ""
+    private var showPercentage = UserDefaults.standard.object(forKey: "showPercentage") as? Bool ?? true
+    private var lowAlerts = UserDefaults.standard.object(forKey: "lowAlerts") as? Bool ?? true
+    private var chargingAlerts = UserDefaults.standard.bool(forKey: "chargingAlerts")
+    private var shortcutsEnabled = UserDefaults.standard.bool(forKey: "shortcutsEnabled")
+    private var experienceMessage: String?
+    private var recoveryNoticeShown = false
+    private var batteryAlerts = BatteryAlertPolicy(notifiedTiers: UserDefaults.standard.dictionary(forKey: "batteryAlertTiers") as? [String: Int] ?? [:])
     private let hosting: NSHostingController<PanelView>
     private let diagnosticsEnabled: Bool
     /// Explicit CLI appearance; `.system` keeps normal inheritance instead of locking a look.
@@ -73,6 +83,12 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     }
 
     func start() {
+        hotKeys.action = { [weak self] in self?.diag("hotkey id=\($0)"); self?.handleHotKey($0) }
+        if shortcutsEnabled && !hotKeys.enable() {
+            shortcutsEnabled = false
+            experienceMessage = "快捷键被占用，尚未启用。"
+            UserDefaults.standard.set(false, forKey: "shortcutsEnabled")
+        }
         if let button = statusItem.button {
             // Keep the native in-ear silhouette and its acoustic-port details at menu-bar size.
             // The previous tiny bitmap reduced both earbuds to two indistinct vertical stems.
@@ -319,6 +335,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             return
         }
         showSettingsButton = false
+        currentDeviceID = address
         let transport = RFCOMMTransport(device: device)
         let transactions = TransactionController(transport: transport, defaultTimeout: 2)
         self.transport = transport
@@ -385,6 +402,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private func teardownSession(bumpBackoff: Bool) {
         generation += 1
         noticePolicy.beginSession()
+        batteryAlerts.beginSession()
+        currentDeviceID = ""
         connectionNotice.hide()
         transactions?.cancel()
         pollTimer?.invalidate()
@@ -405,6 +424,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
 
     /// Called at termination: no timers, no observer, channel closed.
     func shutdown() {
+        hotKeys.disable()
         stopped = true
         ready = false
         warmupTimer?.invalidate()
@@ -632,6 +652,156 @@ final class MenuManager: NSObject, NSPopoverDelegate {
 
     private var canWrite: Bool { noiseGate.enabled }
 
+    // MARK: - Daily experience
+
+    private var sceneJournalURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("EncoX3/scene-restore.json")
+    }
+    private var savedScenes: [String: ListeningScene] {
+        guard let data = UserDefaults.standard.data(forKey: "listeningScenes") else { return [:] }
+        return (try? JSONDecoder().decode([String: ListeningScene].self, from: data)) ?? [:]
+    }
+    private var pendingScene: Bool {
+        guard FileManager.default.fileExists(atPath: sceneJournalURL.path) else { return false }
+        guard let data = try? Data(contentsOf: sceneJournalURL), let journal = try? JSONDecoder().decode(SceneJournal.self, from: data) else { return true }
+        return !journal.completed
+    }
+    private func persistScene(_ journal: SceneJournal) throws {
+        try FileManager.default.createDirectory(at: sceneJournalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(journal).write(to: sceneJournalURL, options: .atomic)
+    }
+    private func experienceSnapshot() -> ExperienceSnapshot {
+        let scenes = savedScenes
+        return ExperienceSnapshot(showPercentage: showPercentage, lowAlerts: lowAlerts,
+            chargingAlerts: chargingAlerts, shortcuts: shortcutsEnabled,
+            scenes: (0..<3).map { index in
+                guard let scene = scenes[String(index)], scene.isAllowed else { return "尚未保存" }
+                return "\(X3Profile.interpretation(ofBitmap: scene.noise).matchedLabel ?? "未知") · \(X3Profile.equalizerName(scene.equalizer, devicePresets: state.equalizerPresets)) · \(X3Profile.spatialName(scene.spatial))"
+            }, canSave: canWrite && canWriteAudio, canApply: canWrite && canWriteAudio && !pendingScene,
+            outputDevices: AudioOutput.devices(), currentOutput: AudioOutput.currentID(),
+            recoveryNeeded: pendingScene && !isWorking, message: experienceMessage)
+    }
+    private func showExperience() {
+        popover.performClose(nil)
+        connectionNotice.hide()
+        experienceWindow.show(experienceSnapshot()) { [weak self] in self?.experienceAction($0) }
+    }
+    private func experienceAction(_ action: ExperienceAction) {
+        experienceMessage = nil
+        let defaults = UserDefaults.standard
+        switch action {
+        case .panel: experienceWindow.close(); showPopover()
+        case .percentage(let enabled): showPercentage = enabled; defaults.set(enabled, forKey: "showPercentage")
+        case .low(let enabled): lowAlerts = enabled; defaults.set(enabled, forKey: "lowAlerts")
+        case .charging(let enabled): chargingAlerts = enabled; defaults.set(enabled, forKey: "chargingAlerts")
+        case .shortcuts(let enabled):
+            shortcutsEnabled = enabled && hotKeys.enable()
+            if !enabled { hotKeys.disable() }
+            if enabled && !shortcutsEnabled { experienceMessage = "快捷键被占用或无法注册，尚未启用。" }
+            defaults.set(shortcutsEnabled, forKey: "shortcutsEnabled")
+        case .save(let index): Task { @MainActor [weak self] in await self?.saveScene(index) }
+        case .apply(let index): Task { @MainActor [weak self] in await self?.applyScene(index) }
+        case .recover: Task { @MainActor [weak self] in await self?.recoverScene() }
+        case .output(let uid):
+            experienceMessage = AudioOutput.select(uid: uid) ? "Mac 音频输出已切换。" : "未能切换输出，设备可能已断开。"
+        }
+        render()
+    }
+    private func handleHotKey(_ id: UInt32) {
+        switch id {
+        case 0: showPopover()
+        case 1:
+            // Existing readback gate applies; never toggle from unknown or stale state.
+            guard canWrite else { setError(noiseGate.reason ?? "请先连接耳机"); showPopover(); return }
+            let isCancellation = X3Profile.levelSpecs.contains { $0.bitmap == state.noiseReductionRawValue }
+            performWrite(bitmap: isCancellation ? 256 : 128)
+        case 2...4: Task { @MainActor [weak self] in await self?.applyScene(Int(id) - 2) }
+        default: break
+        }
+    }
+    private func readScene(token: Int, transactions: TransactionController) async -> ListeningScene? {
+        var read = DeviceState()
+        let queries: [(EncoCommand, [UInt8])] = [(.queryNoiseReduction, EncoPayload.noiseReductionCurrent), (.queryEqualizer, []), (.querySpatial, [])]
+        for (cmd, payload) in queries {
+            guard token == generation, !stopped, transport?.state == .open else { return nil }
+            let result = await transactions.queryAsync(cmd: cmd.rawValue, payload: payload)
+            guard token == generation, result.outcome == .ok else { return nil }
+            ResponseParser.apply(Frame(cmd: cmd.rawValue | 0x8000, sequence: 0, payload: result.payload, raw: []), to: &read)
+        }
+        guard let noise = read.noiseReductionRawValue, let eq = read.equalizerPresetID, let spatial = read.spatialType else { return nil }
+        return ListeningScene(noise: noise, equalizer: eq, spatial: spatial)
+    }
+    private func writeSceneField(_ field: ListeningScene.Field, value: UInt32, token: Int, transactions: TransactionController) async -> Bool {
+        guard token == generation, !stopped, transport?.state == .open else { return false }
+        let result: TransactionResult
+        switch field {
+        case .noise: result = await transactions.setNoiseReductionAsync(bitmap: value)
+        case .equalizer: result = await transactions.setEqualizerAsync(id: Int(value))
+        case .spatial: result = await transactions.setSpatialAsync(type: Int(value))
+        }
+        diag("scene \(field) target=\(value) outcome=\(result.outcome)")
+        return token == generation && result.outcome == .verified
+    }
+    private func saveScene(_ index: Int) async {
+        guard (0..<3).contains(index), canWrite, canWriteAudio, let transactions else { return }
+        let token = generation
+        isWorking = true; render()
+        defer { if token == generation { isWorking = false; render() } }
+        guard let scene = await readScene(token: token, transactions: transactions), scene.isAllowed else {
+            experienceMessage = "当前设置未能完整读取，场景未保存。"; return
+        }
+        var scenes = savedScenes
+        scenes[String(index)] = scene
+        if let data = try? JSONEncoder().encode(scenes) {
+            UserDefaults.standard.set(data, forKey: "listeningScenes")
+            experienceMessage = "已保存当前降噪、均衡器与空间模式。"
+        }
+    }
+    private func applyScene(_ index: Int) async {
+        guard !pendingScene else { experienceMessage = "请先恢复上次未完成的操作。"; showExperience(); return }
+        guard let target = savedScenes[String(index)], target.isAllowed else {
+            experienceMessage = "该场景尚未保存。"; showExperience(); return
+        }
+        guard canWrite, canWriteAudio, let transactions else {
+            experienceMessage = "耳机未就绪或正在处理请求，请稍后重试。"; showExperience(); return
+        }
+        let token = generation
+        isWorking = true; render()
+        defer { if token == generation { isWorking = false; render() } }
+        let outcome = await SceneRunner.apply(target: target, deviceID: currentDeviceID,
+            read: { await self.readScene(token: token, transactions: transactions) },
+            write: { await self.writeSceneField($0, value: $1, token: token, transactions: transactions) },
+            persist: { try self.persistScene($0) })
+        switch outcome {
+        case .applied: experienceMessage = "场景已应用，三个设置已回读确认。"
+        case .restored: experienceMessage = "场景未能完整应用，已恢复操作前设置。"
+        case .needsRecovery: experienceMessage = "操作未能完整确认；恢复记录已保留，请连接原耳机后恢复。"
+        case .refused: experienceMessage = "未能读取原设置或保存恢复记录，没有开始切换。"
+        }
+        if outcome != .applied { setError(experienceMessage ?? "场景操作失败"); showExperience() }
+    }
+    private func recoverScene() async {
+        guard canWrite, canWriteAudio, let transactions,
+              let data = try? Data(contentsOf: sceneJournalURL),
+              var journal = try? JSONDecoder().decode(SceneJournal.self, from: data),
+              !journal.completed, journal.deviceID == currentDeviceID, journal.original.isAllowed else {
+            experienceMessage = "恢复记录无效，或当前不是原来的耳机；没有发送设置。"; render(); return
+        }
+        let token = generation
+        isWorking = true; render()
+        defer { if token == generation { isWorking = false; render() } }
+        for field in ListeningScene.Field.allCases {
+            _ = await writeSceneField(field, value: journal.original.value(field), token: token, transactions: transactions)
+        }
+        journal.restoreVerified = await readScene(token: token, transactions: transactions) == journal.original
+        journal.completed = journal.restoreVerified
+        do {
+            try persistScene(journal)
+            experienceMessage = journal.completed ? "已恢复操作前设置，并独立回读确认。" : "仍未确认恢复，请保持原耳机连接后重试。"
+        } catch { experienceMessage = "无法更新恢复记录，原始记录已保留。" }
+    }
+
     // MARK: - Snapshot
 
     private func render() {
@@ -655,7 +825,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
                 level: reading?.level,
                 charging: reading?.charging ?? false,
                 isStale: !batteryFresh,
-                help: (slot == .chargingCase && reading?.level == nil) ? "盒盖打开且耳机入盒时可读取" : nil
+                help: (slot == .chargingCase && reading?.level == nil) ? "盒盖打开且耳机入盒时可读取" : state.wearing[slot].flatMap { state.isFresh($0.updatedAt) ? $0.label : nil }
             ))
         }
 
@@ -783,11 +953,31 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             showSettingsButton: showSettingsButton,
             connectionNoticesEnabled: connectionNoticesEnabled
         )
+        if let button = statusItem.button {
+            let percent = [BatterySlot.left, .right].compactMap { state.battery[$0]?.level }.min()
+            button.title = showPercentage && batteryFresh && transport?.state == .open ? percent.map { " \($0)%" } ?? "" : ""
+            button.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            button.imagePosition = .imageLeft
+            button.toolTip = "Enco X3 · " + batteries.map { "\($0.title) \($0.isStale ? "--" : $0.value)" }.joined(separator: " · ")
+        }
         renderIntoHost()
+        if experienceWindow.visible { experienceWindow.update(experienceSnapshot()) { [weak self] in self?.experienceAction($0) } }
         if connectionNotice.isVisible { connectionNotice.update(snapshot: snapshot) }
         let noticeReady = transport?.state == .open && state.productID == X3Profile.productID && state.batteryIsFresh()
         if noticePolicy.shouldPresent(ready: noticeReady, enabled: connectionNoticesEnabled) {
             if !popover.isShown { presentConnectionNotice() }
+        }
+        if noticeReady && !isWorking && pendingScene && !recoveryNoticeShown {
+            recoveryNoticeShown = true
+            experienceMessage = "上次场景操作未完整结束，请先恢复操作前设置。"
+            connectionNotice.present(snapshot: snapshot, appearance: appearance, message: "上次场景尚未完成，请恢复设置") { [weak self] in self?.showExperience() }
+        }
+        let oldTiers = batteryAlerts.notifiedTiers
+        let batteryMessages = batteryAlerts.update(state.battery, fresh: noticeReady, lowEnabled: lowAlerts, chargingEnabled: chargingAlerts)
+        if oldTiers != batteryAlerts.notifiedTiers { UserDefaults.standard.set(batteryAlerts.notifiedTiers, forKey: "batteryAlertTiers") }
+        if let first = batteryMessages.first {
+            let message = first + (batteryMessages.count > 1 ? " 等\(batteryMessages.count)项" : "")
+            connectionNotice.present(snapshot: snapshot, appearance: appearance, message: message) { [weak self] in self?.showPopover() }
         }
     }
 
@@ -801,6 +991,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
                 self?.clearError()
                 self?.refresh(withQueries: true, force: true)
             },
+            onExperience: { [weak self] in self?.showExperience() },
             onAbout: { [weak self] in self?.showAbout() },
             onOpenSettings: {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth") {

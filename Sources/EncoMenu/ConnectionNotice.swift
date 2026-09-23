@@ -8,6 +8,7 @@ final class ConnectionNotice {
     private let host: NSHostingView<ConnectionNoticeView>
     private var dismissal: Timer?
     private var appearance: PanelAppearance = .system
+    private var message: String?
     private var onOpen: () -> Void = {}
     var isVisible: Bool { panel.isVisible }
 
@@ -22,13 +23,14 @@ final class ConnectionNotice {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        host = NSHostingView(rootView: ConnectionNoticeView(snapshot: .empty(), appearance: .system, onOpen: {}, onClose: {}))
+        host = NSHostingView(rootView: ConnectionNoticeView(snapshot: .empty(), appearance: .system, message: nil, onOpen: {}, onClose: {}))
         panel.contentView = host
     }
 
-    func present(snapshot: PanelSnapshot, appearance: PanelAppearance, onOpen: @escaping () -> Void) {
+    func present(snapshot: PanelSnapshot, appearance: PanelAppearance, message: String? = nil, onOpen: @escaping () -> Void) {
         self.onOpen = onOpen
         self.appearance = appearance
+        self.message = message
         panel.appearance = appearance.nsAppearance
         host.appearance = appearance.nsAppearance
         update(snapshot: snapshot)
@@ -46,7 +48,7 @@ final class ConnectionNotice {
     }
 
     func update(snapshot: PanelSnapshot) {
-        host.rootView = ConnectionNoticeView(snapshot: snapshot, appearance: appearance, onOpen: { [weak self] in
+        host.rootView = ConnectionNoticeView(snapshot: snapshot, appearance: appearance, message: message, onOpen: { [weak self] in
             self?.hide()
             self?.onOpen()
         }, onClose: { [weak self] in self?.hide() })
@@ -62,6 +64,7 @@ final class ConnectionNotice {
 private struct ConnectionNoticeView: View {
     let snapshot: PanelSnapshot
     let appearance: PanelAppearance
+    let message: String?
     let onOpen: () -> Void
     let onClose: () -> Void
 
@@ -72,7 +75,7 @@ private struct ConnectionNoticeView: View {
                     .foregroundStyle(PanelPalette.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Enco X3").font(.system(size: 17, weight: .semibold))
-                    Text("已连接").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(message ?? "已连接").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).help(message ?? "已连接")
                 }
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(.tertiary) }

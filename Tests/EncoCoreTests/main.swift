@@ -21,9 +21,12 @@ audioVerificationChecks(checker)
 print("")
 eqDuplicateIDChecks(checker)
 connectionNoticeChecks(checker)
+batteryAlertChecks(checker)
+wearingChecks(checker)
 
 Task { @MainActor in
     await asyncTransactionChecks(checker)
+    await sceneRunnerChecks(checker)
     exit(checker.summary())
 }
 RunLoop.main.run()

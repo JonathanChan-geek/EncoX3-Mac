@@ -133,6 +133,7 @@ struct PanelActions {
     var onEqualizerMenu: () -> Void
     var onSpatialMenu: () -> Void
     var onRefresh: () -> Void
+    var onExperience: () -> Void = {}
     var onAbout: () -> Void
     var onOpenSettings: () -> Void
     var onQuit: () -> Void

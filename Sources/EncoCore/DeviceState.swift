@@ -40,6 +40,7 @@ public struct BatteryReading: Equatable {
 public struct DeviceState {
     public var battery: [BatterySlot: BatteryReading] = [:]
     public var batteryUpdatedAt: Date?
+    public var wearing: [BatterySlot: WearingReading] = [:]
     /// Raw noise-reduction bitmap as sent (little endian), no mode naming applied yet.
     public var noiseReductionRawValue: UInt32?
     public var noiseReductionRawPayload: [UInt8]?

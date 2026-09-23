@@ -37,7 +37,7 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>6</string>
+	<string>7</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>

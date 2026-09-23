@@ -320,7 +320,13 @@ public enum ResponseParser {
             }
             state.connectedDevices = devices
             state.multiConnectUpdatedAt = date
-        case .earbudsStatus, .none:
+        case .earbudsStatus:
+            guard let readings = WearingReading.parse(payload, at: date) else {
+                markUnparsed(payload, cmd: EncoCommand.activeReport.rawValue, in: &state)
+                return
+            }
+            state.wearing.merge(readings) { _, new in new }
+        case .none:
             break
         }
     }
