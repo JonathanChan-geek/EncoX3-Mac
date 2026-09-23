@@ -71,9 +71,13 @@ final class MenuManager: NSObject, NSPopoverDelegate {
 
     func start() {
         if let button = statusItem.button {
-            button.image = NSImage(named: "StatusIconTemplate")
+            // Keep the native in-ear silhouette and its acoustic-port details at menu-bar size.
+            // The previous tiny bitmap reduced both earbuds to two indistinct vertical stems.
+            let symbol = NSImage(systemSymbolName: "airpodspro", accessibilityDescription: "Enco X3")
                 ?? NSImage(systemSymbolName: "earbuds", accessibilityDescription: "Enco X3")
-            button.image?.size = NSSize(width: 18, height: 18)
+            button.image = symbol?.withSymbolConfiguration(.init(pointSize: 17, weight: .regular))
+            button.image?.size = NSSize(width: 24, height: 18)
+            button.setAccessibilityLabel("Enco X3")
             button.image?.isTemplate = true
             button.action = #selector(statusItemClicked(_:))
             button.target = self

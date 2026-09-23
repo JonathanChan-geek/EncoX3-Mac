@@ -8,5 +8,8 @@ Regenerate the PNGs and multi-resolution ICNS from the repository root:
 ```sh
 swift scripts/make-icons.swift .build/icon-artwork
 iconutil -c icns .build/icon-artwork/AppIcon.iconset -o Assets/AppIcon.icns
-cp .build/icon-artwork/AppIcon.png .build/icon-artwork/StatusIconTemplate.png Assets/
+cp .build/icon-artwork/AppIcon.png Assets/
 ```
+
+The menu-bar glyph is loaded from macOS SF Symbols at runtime (`airpodspro`). It is
+not copied into the bundle and is not part of the original GPL artwork above.

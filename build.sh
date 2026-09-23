@@ -37,7 +37,7 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
@@ -61,7 +61,7 @@ copy_licenses() {
   cp -R LICENSES "$resources/LICENSES"
   cp docs/UPSTREAM.md "$resources/UPSTREAM.md"
   cp docs/INSTALL.zh-CN.md "$resources/INSTALL.zh-CN.md"
-  cp Assets/AppIcon.icns Assets/StatusIconTemplate.png "$resources/"
+  cp Assets/AppIcon.icns "$resources/"
   printf 'Corresponding source (GPL-3.0-or-later):\nhttps://github.com/JonathanChan-geek/EncoX3-Mac/tree/v%s\n' "$APP_VERSION" > "$resources/SOURCE.txt"
 }
 

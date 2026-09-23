@@ -25,26 +25,18 @@ func bud(x: CGFloat, y: CGFloat, angle: CGFloat, mirrored: Bool) {
     round(NSRect(x: -10, y: -137, width: 16, height: 8), 4, NSColor(white: 0.42, alpha: 1))
     NSGraphicsContext.restoreGraphicsState()
 }
-func render(size: Int, status: Bool = false) -> Data {
+func render(size: Int) -> Data {
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
     let scale = NSAffineTransform(); scale.scale(by: CGFloat(size) / 1024); scale.concat()
-    if status {
-        NSColor.black.setFill()
-        for (x, y) in [(230.0, 585.0), (680.0, 665.0)] {
-            round(NSRect(x: x - 65, y: y - 390, width: 130, height: 435), 65, .black)
-            round(NSRect(x: x - 130, y: y - 30, width: 245, height: 205), 90, .black)
-        }
-    } else {
-        let shape = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 202, yRadius: 202)
-        NSGradient(starting: NSColor(red: 0.025, green: 0.12, blue: 0.27, alpha: 1),
-                   ending: NSColor(red: 0.03, green: 0.60, blue: 0.86, alpha: 1))!.draw(in: shape, angle: 65)
-        bud(x: 355, y: 476, angle: -17, mirrored: false)
-        bud(x: 687, y: 538, angle: 17, mirrored: true)
-    }
+    let shape = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 202, yRadius: 202)
+    NSGradient(starting: NSColor(red: 0.025, green: 0.12, blue: 0.27, alpha: 1),
+               ending: NSColor(red: 0.03, green: 0.60, blue: 0.86, alpha: 1))!.draw(in: shape, angle: 65)
+    bud(x: 355, y: 476, angle: -17, mirrored: false)
+    bud(x: 687, y: 538, angle: 17, mirrored: true)
     NSGraphicsContext.restoreGraphicsState()
     return bitmap.representation(using: .png, properties: [:])!
 }
@@ -55,4 +47,3 @@ for base in [16, 32, 128, 256, 512] {
     try render(size: base * 2).write(to: iconset.appendingPathComponent("icon_\(base)x\(base)@2x.png"))
 }
 try render(size: 1024).write(to: output.appendingPathComponent("AppIcon.png"))
-try render(size: 36, status: true).write(to: output.appendingPathComponent("StatusIconTemplate.png"))
