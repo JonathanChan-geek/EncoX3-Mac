@@ -58,7 +58,10 @@ enum PanelMetrics {
     static let noiseCardSpacing: CGFloat = 8
     static let levelSegmentHeight: CGFloat = 26
     static let artworkWidth: CGFloat = 44
-    static let artworkHeight: CGFloat = 46
+    static let artworkHeight: CGFloat = 44
+    static let batteryLabelHeight: CGFloat = 14
+    static let batteryValueHeight: CGFloat = 20
+    static let batteryRowGap: CGFloat = 5
     /// Reserved strip under the footer for a one-line problem message. Always present, so the
     /// layout never jumps when a message appears.
     static let errorSlotHeight: CGFloat = 20

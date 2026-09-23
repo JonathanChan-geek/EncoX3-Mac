@@ -119,11 +119,12 @@ struct PanelView: View {
     private var batteryBlock: some View {
         HStack(spacing: 0) {
             ForEach(snapshot.batteries, id: \.title) { battery in
-                VStack(spacing: 4) {
+                VStack(spacing: PanelMetrics.batteryRowGap) {
                     EarbudArtwork(kind: battery.kind)
                     Text(battery.title)
                         .font(PanelFonts.micro)
                         .foregroundStyle(PanelPalette.secondaryText)
+                        .frame(height: PanelMetrics.batteryLabelHeight)
                     HStack(spacing: 4) {
                         Text(battery.value)
                             .font(PanelFonts.value)
@@ -138,7 +139,9 @@ struct PanelView: View {
                                 .help("读数待刷新")
                         }
                     }
+                    .frame(height: PanelMetrics.batteryValueHeight)
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
                 .help(battery.help ?? "")
             }

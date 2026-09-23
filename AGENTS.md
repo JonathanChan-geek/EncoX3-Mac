@@ -1,6 +1,6 @@
 # Enco X3 for Mac
 
-Independent native Swift macOS application. Astra owns architecture and acceptance; Kimi executes bounded dispatch work orders. No GPT workers.
+Independent native Swift macOS application. The current agent implements, reviews, and verifies routine work directly, including small fixes and UI iteration. Use Kimi only when the user explicitly requests delegation or a genuinely independent workstream has a clear benefit; do not dispatch merely because the current agent is Astra. No GPT workers.
 
 ## Device safety
 - Start with read-only enumeration and status queries on an already paired, connected OPPO Enco X3.

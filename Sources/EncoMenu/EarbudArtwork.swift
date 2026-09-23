@@ -54,37 +54,6 @@ struct EarbudTipShape: Shape {
     }
 }
 
-/// The charging case: a rounded body with a lid seam and a tiny status light.
-struct CaseShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addRoundedRect(
-            in: CGRect(x: 5, y: 11, width: 34, height: 30),
-            cornerSize: CGSize(width: 12, height: 12),
-            style: .continuous
-        )
-        var result = path
-        for transform in artworkTransform(in: rect, mirrored: false) {
-            result = result.applying(transform)
-        }
-        return result
-    }
-}
-
-/// Lid seam of the case, in design space.
-struct CaseSeamShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: 7, y: 24))
-        path.addLine(to: CGPoint(x: 37, y: 24))
-        var result = path
-        for transform in artworkTransform(in: rect, mirrored: false) {
-            result = result.applying(transform)
-        }
-        return result
-    }
-}
-
 struct EarbudArtwork: View {
     var kind: ArtworkKind
 
@@ -119,19 +88,25 @@ struct EarbudArtwork: View {
                     .frame(width: 2.2, height: 2.2)
                     .offset(x: mirrored ? 4.2 : -4.2, y: 14)
             case .chargingCase:
-                CaseShape()
+                // Explicit dimensions keep the case inside the artwork cell; the lid and
+                // indicator are overlays so they cannot expand the stack's layout bounds.
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(caseGradient)
-                    .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
-                CaseSeamShape()
-                    .stroke(Color.black.opacity(0.18), lineWidth: 1)
-                // Single neutral status light: no evidence the case is charging, so no green.
-                Circle()
-                    .fill(Color.black.opacity(0.28))
-                    .frame(width: 3, height: 3)
-                    .offset(y: 8)
+                    .frame(width: 38, height: 30)
+                    .overlay {
+                        VStack(spacing: 5) {
+                            Rectangle().fill(Color.black.opacity(0.2))
+                                .frame(width: 32, height: 0.7)
+                            Circle().fill(Color.black.opacity(0.35))
+                                .frame(width: 2.5, height: 2.5)
+                        }
+                        .offset(y: -1)
+                    }
+                    .shadow(color: .black.opacity(0.1), radius: 1.5, x: 0, y: 1)
             }
         }
         .frame(width: PanelMetrics.artworkWidth, height: PanelMetrics.artworkHeight)
+        .clipped()
     }
 
     /// Opaque near-white body so it reads as a solid earbud, not a transparent line drawing.
@@ -185,7 +160,7 @@ struct EarbudArtwork: View {
         LinearGradient(
             colors: [
                 Color(nsColor: .white),
-                Color(nsColor: .systemGray).opacity(0.5),
+                Color(red: 0.77, green: 0.78, blue: 0.80),
             ],
             startPoint: .top,
             endPoint: .bottom
