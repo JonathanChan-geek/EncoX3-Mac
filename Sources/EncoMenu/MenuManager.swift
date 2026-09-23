@@ -13,6 +13,9 @@ import IOBluetooth
 final class MenuManager: NSObject, NSPopoverDelegate {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
+    private let connectionNotice = ConnectionNotice()
+    private var noticePolicy = ConnectionNoticePolicy()
+    private var connectionNoticesEnabled = UserDefaults.standard.object(forKey: "connectionNoticesEnabled") as? Bool ?? true
     private let hosting: NSHostingController<PanelView>
     private let diagnosticsEnabled: Bool
     /// Explicit CLI appearance; `.system` keeps normal inheritance instead of locking a look.
@@ -105,12 +108,9 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             object: nil
         )
 
-        // The panel comes up first, with no Bluetooth call on the main thread. The single
-        // read-only warm-up below is what lets IOBluetooth finish initialising; only then is the
-        // normal connect path allowed to run on the main run loop.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.showPopover()
-        }
+        // The read-only warm-up lets IOBluetooth initialise off the main thread before connecting.
+        // A verified connection announces with a non-activating card. The full panel is opened
+        // only by the user, so a background launch/reconnect cannot steal typing focus.
         render()
         beginBluetoothWarmup()
     }
@@ -152,6 +152,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     /// Brings the panel up (menu action, first launch, reopen). Activates the app so the panel
     /// accepts clicks right away; no extra window is created.
     func showPopover() {
+        connectionNotice.hide()
         guard !popover.isShown, let button = statusItem.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -383,6 +384,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     /// system pairing or the audio connection.
     private func teardownSession(bumpBackoff: Bool) {
         generation += 1
+        noticePolicy.beginSession()
+        connectionNotice.hide()
         transactions?.cancel()
         pollTimer?.invalidate()
         pollTimer = nil
@@ -434,6 +437,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     }
 
     private func clearDeviceState() {
+        connectionNotice.hide()
         state = DeviceState()
         lastAdvancedQueryAt = nil
         // The error line is deliberately kept: a disconnect sets it, and clearing state must not
@@ -776,9 +780,15 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             lastUpdateText: Self.footerTimestamp(state: state).map { "最近更新 \(TimestampText.clock($0))" } ?? "尚无数据",
             errorLine: errorLine ?? warmupNotice,
             busy: isWorking || isConnecting,
-            showSettingsButton: showSettingsButton
+            showSettingsButton: showSettingsButton,
+            connectionNoticesEnabled: connectionNoticesEnabled
         )
         renderIntoHost()
+        if connectionNotice.isVisible { connectionNotice.update(snapshot: snapshot) }
+        let noticeReady = transport?.state == .open && state.productID == X3Profile.productID && state.batteryIsFresh()
+        if noticePolicy.shouldPresent(ready: noticeReady, enabled: connectionNoticesEnabled) {
+            if !popover.isShown { presentConnectionNotice() }
+        }
     }
 
     private func renderIntoHost() {
@@ -797,13 +807,30 @@ final class MenuManager: NSObject, NSPopoverDelegate {
                     NSWorkspace.shared.open(url)
                 }
             },
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            onPreviewConnectionNotice: { [weak self] in
+                guard let self, self.snapshot.connectionOK else { return }
+                self.popover.performClose(nil)
+                self.presentConnectionNotice()
+            },
+            onToggleConnectionNotice: { [weak self] in
+                guard let self else { return }
+                self.connectionNoticesEnabled.toggle()
+                UserDefaults.standard.set(self.connectionNoticesEnabled, forKey: "connectionNoticesEnabled")
+                if !self.connectionNoticesEnabled { self.connectionNotice.hide() }
+                self.render()
+            }
         )
         // Re-assert the explicit appearance on every rootView swap; `.system` leaves it alone.
         if let nsAppearance = appearance.nsAppearance {
             hosting.view.appearance = nsAppearance
         }
         hosting.rootView = PanelView(snapshot: snapshot, actions: actions, appearance: appearance)
+    }
+
+    private func presentConnectionNotice() {
+        connectionNotice.present(snapshot: snapshot, appearance: appearance) { [weak self] in self?.showPopover() }
+        diag("connection notice shown")
     }
 
     /// About: what this app is, what it deliberately does not do, and the licence. Read-only.

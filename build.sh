@@ -37,7 +37,7 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>5</string>
+	<string>6</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
@@ -89,7 +89,7 @@ package_app "Enco Probe" encoctl local.nigo.EncoX3Probe
 
 echo
 echo "done."
-echo "  open '.build/apps/Enco X3.app'                                # 菜单栏应用（首次启动自动展开面板）"
+echo "  open '.build/apps/Enco X3.app'                                # 连接后显示电量卡片，点击菜单栏展开控制面板"
 echo "  EncoMenu --diagnostics                                 # 附：最小状态日志到 stderr"
 echo "  '.build/apps/Enco Probe.app/Contents/MacOS/encoctl' probe --seconds 20"
 echo "  '.build/apps/Enco Probe.app/Contents/MacOS/encoctl' cycle-anc --journal /绝对路径/anc-restore.json"

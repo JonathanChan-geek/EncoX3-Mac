@@ -1,4 +1,5 @@
 import Foundation
+import CoreAudio
 import EncoCore
 import EncoBluetooth
 
@@ -38,19 +39,28 @@ enum CycleAudioCommand {
     }
 
     static func run(arguments: [String]) -> Int32 {
+        let listening = arguments.contains("--listen-spatial")
+        let commandArguments = arguments.filter { $0 != "--listen-spatial" }
+        let eqSequence = listening ? [] : eqOrder
+        let spatialSequence = listening ? [1, 2] : spatialOrder
         let journalURL: URL
         do {
-            journalURL = try parseArguments(arguments)
+            journalURL = try parseArguments(commandArguments)
         } catch {
             print("FATAL: \(error)")
-            print("usage: encoctl cycle-audio [--journal /absolute/path.json]")
+            print("usage: encoctl cycle-audio [--listen-spatial] [--journal /absolute/path.json]")
             return 2
         }
 
+        // Do not play a listening stimulus to an unrelated output route, or silently change it.
+        if listening, !ListeningOutput.isEncoDefaultOutput() {
+            print("FATAL: 当前默认音频输出不是 Enco X3；请手动选择耳机后再测试。未连接控制通道、未改设置。")
+            return 3
+        }
         Diagnostics.printEnvironment()
         print("mode: cycle-audio（写测试：仅 0x0404 / 0x0406 / 0x0422，逐项 ACK + 回读）")
         print("journal: \(journalURL.path)")
-        print("EQ 顺序: \(eqOrder)  空间顺序: \(spatialOrder)")
+        print("EQ 顺序: \(eqSequence)  空间顺序: \(spatialSequence)")
         print("")
 
         // Refuse to overwrite an unfinished record before touching the device at all: it holds
@@ -77,6 +87,9 @@ enum CycleAudioCommand {
         transport.onLog = { print("[\(Timestamp.now())] \($0)") }
         transport.onState = { print("[\(Timestamp.now())] LINK state=\($0)") }
         transport.onFrame = { frame in
+            if listening, frame.cmd == EncoCommand.activeReport.rawValue {
+                print("[\(Timestamp.now())] PASSIVE cmd=0204 payload=\(Hex.string(frame.payload))")
+            }
             ResponseParser.apply(frame, to: &state)
             transactions.accept(frame)
         }
@@ -224,7 +237,7 @@ enum CycleAudioCommand {
         var stopReason: String?
 
         print("--- EQ 预设轮转 ---")
-        for id in eqOrder {
+        for id in eqSequence {
             if interrupted.value {
                 stopReason = "收到中断信号"
                 print("!! 收到 SIGINT/SIGTERM，转入恢复流程")
@@ -246,7 +259,7 @@ enum CycleAudioCommand {
         if stopReason == nil {
             print("")
             print("--- 空间音效轮转 ---")
-            for type in spatialOrder {
+            for type in spatialSequence {
                 if interrupted.value {
                     stopReason = "收到中断信号"
                     print("!! 收到 SIGINT/SIGTERM，转入恢复流程")
@@ -262,10 +275,33 @@ enum CycleAudioCommand {
                     break
                 }
                 print("      结果: 写入并回读一致 ✓（听感未验证）")
-                RunLoopPump.pump(for: stepSpacing)
+                if listening {
+                    guard ListeningOutput.isEncoDefaultOutput() else {
+                        stopReason = "听感测试中输出设备改变，停止播放并恢复"
+                        break
+                    }
+                    print("[\(Timestamp.now())] LISTEN stage=\(type) duration=20s")
+                    fflush(stdout)
+                    let speech = Process()
+                    speech.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+                    let label = type == 1 ? "第一段，固定模式。" : "第二段，头部跟随模式。"
+                    speech.arguments = ["-r", "150", label + "请先看向正前方。现在缓慢向左转头，再回到中间，然后向右转头。留意这段人声的位置。它是跟着你的头一起转，还是仍然停在你面前？请再慢慢重复一次。"]
+                    do { try speech.run() }
+                    catch { stopReason = "无法播放测试人声：\(error)"; break }
+                    RunLoopPump.pump(until: Date().addingTimeInterval(20), shouldStop: {
+                        interrupted.value || !ListeningOutput.isEncoDefaultOutput()
+                    })
+                    if speech.isRunning { speech.terminate(); speech.waitUntilExit() }
+                    if interrupted.value || !ListeningOutput.isEncoDefaultOutput() {
+                        stopReason = "测试被中断或输出改变，转入恢复"
+                        break
+                    }
+                } else {
+                    RunLoopPump.pump(for: stepSpacing)
+                }
             }
         }
-        if stopReason == nil { print("EQ 与空间音效轮转完成") }
+        if stopReason == nil { print("EQ 与空间音效轮转完成（声学结论须另记，不由 ACK 推断）") }
         print("")
 
         // ---- queries whose responses the verification is computed from ----
@@ -448,5 +484,22 @@ enum CycleAudioCommand {
     private static func absoluteURL(_ path: String) throws -> URL {
         guard path.hasPrefix("/") else { throw ArgumentError.journalMustBeAbsolute(path) }
         return URL(fileURLWithPath: path)
+    }
+}
+
+/// Read-only CoreAudio routing check for the user-assisted listening experiment.
+private enum ListeningOutput {
+    static func isEncoDefaultOutput() -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr else { return false }
+        address.mSelector = kAudioObjectPropertyName
+        var name: CFString = "" as CFString
+        size = UInt32(MemoryLayout<CFString>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr else { return false }
+        let normalized = (name as String).lowercased().replacingOccurrences(of: " ", with: "")
+        return normalized.contains("encox3")
     }
 }

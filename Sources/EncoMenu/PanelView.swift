@@ -97,6 +97,12 @@ struct PanelView: View {
     private var moreMenu: some View {
         Menu {
             Button("刷新") { actions.onRefresh() }
+            Toggle("连接时显示电量卡片", isOn: Binding(
+                get: { snapshot.connectionNoticesEnabled },
+                set: { _ in actions.onToggleConnectionNotice() }
+            ))
+            Button("显示电量卡片") { actions.onPreviewConnectionNotice() }
+                .disabled(!snapshot.connectionOK)
             Button("关于 Enco X3") { actions.onAbout() }
             if snapshot.showSettingsButton {
                 Divider()

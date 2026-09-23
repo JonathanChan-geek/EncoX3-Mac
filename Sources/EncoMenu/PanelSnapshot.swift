@@ -87,6 +87,7 @@ struct PanelSnapshot {
     var errorLine: String?
     var busy: Bool
     var showSettingsButton: Bool
+    var connectionNoticesEnabled: Bool = true
 
     static func empty() -> PanelSnapshot {
         PanelSnapshot(
@@ -135,4 +136,6 @@ struct PanelActions {
     var onAbout: () -> Void
     var onOpenSettings: () -> Void
     var onQuit: () -> Void
+    var onPreviewConnectionNotice: () -> Void = {}
+    var onToggleConnectionNotice: () -> Void = {}
 }

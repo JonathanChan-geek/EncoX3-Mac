@@ -20,6 +20,7 @@ print("")
 audioVerificationChecks(checker)
 print("")
 eqDuplicateIDChecks(checker)
+connectionNoticeChecks(checker)
 
 Task { @MainActor in
     await asyncTransactionChecks(checker)
