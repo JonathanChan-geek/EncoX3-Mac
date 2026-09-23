@@ -7,6 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG=release
+APP_VERSION="$(cat VERSION)"
+[[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid VERSION' >&2; exit 1; }
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG"
@@ -33,9 +35,9 @@ write_plist() {
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2</string>
+	<string>$APP_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
@@ -56,6 +58,8 @@ copy_licenses() {
   cp LICENSE "$resources/LICENSE"
   cp -R LICENSES "$resources/LICENSES"
   cp docs/UPSTREAM.md "$resources/UPSTREAM.md"
+  cp docs/INSTALL.zh-CN.md "$resources/INSTALL.zh-CN.md"
+  printf 'Corresponding source (GPL-3.0-or-later):\nhttps://github.com/JonathanChan-geek/EncoX3-Mac/tree/v%s\n' "$APP_VERSION" > "$resources/SOURCE.txt"
 }
 
 package_app() {

@@ -2,6 +2,14 @@
 
 独立的原生 macOS 菜单栏应用，使用 Swift/SwiftUI、AppKit 和 IOBluetooth RFCOMM 控制 **OPPO Enco X3（PID 067410）**。不依赖 Electron、Python、后台服务器或手机中转。
 
+## 下载与安装
+
+**[下载最新版安装包](https://github.com/JonathanChan-geek/EncoX3-Mac/releases/latest)** · [安装说明](docs/INSTALL.zh-CN.md)
+
+下载 Apple Silicon（arm64）DMG，打开后将 `Enco X3.app` 拖入 `Applications`。也提供 ZIP 和 SHA-256 校验文件。当前没有 Intel 成品包。
+
+本版为 ad-hoc 签名，**未经过 Developer ID 签名或 Apple 公证**；首次打开可能需要按 [Apple 官方说明](https://support.apple.com/102445) 在“隐私与安全性”中选择“仍要打开”。启动后允许蓝牙访问即可使用。
+
 ## 已完成并实机验证
 
 | 功能 | 当前支持 |
@@ -39,6 +47,7 @@
 swift run EncoCoreChecks   # 独立的离线协议/恢复逻辑校验
 ./build.sh                # Release 构建、打包、ad-hoc 签名与校验
 ./scripts/install.sh      # 安装到 ~/Applications
+./scripts/package-release.sh # 构建 DMG / ZIP / SHA256SUMS 到 release/v<版本>/
 open "$HOME/Applications/Enco X3.app"
 ```
 

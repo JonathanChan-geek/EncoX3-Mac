@@ -1,5 +1,6 @@
 .build/
 dist/
+release/
 .DS_Store
 evidence/local/
 *.xcuserstate
