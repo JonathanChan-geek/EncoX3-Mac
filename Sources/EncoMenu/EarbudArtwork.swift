@@ -1,233 +1,112 @@
 import SwiftUI
 
-/// Original, code-drawn artwork for the battery block: a generic in-ear bud (short stem, silicone
-/// tip, metal collar, small sound port) and a rounded charging case. Nothing is copied from Apple
-/// or from a product photo — these are simple shapes drawn with Path/Shape and gradients.
-enum ArtworkKind {
-    case earbudLeft
-    case earbudRight
-    case chargingCase
-}
+enum ArtworkKind { case earbudLeft, earbudRight, chargingCase }
 
-/// The bud body plus its short stem, drawn in a normalised 44×46 design box and mirrored for the
-/// left unit. Keeping the design in one space and transforming the finished path keeps the drawing
-/// readable (and the type checker happy).
-private let artworkDesignSize = CGSize(width: 44, height: 46)
-
-private func artworkTransform(in rect: CGRect, mirrored: Bool) -> [CGAffineTransform] {
-    var transforms: [CGAffineTransform] = []
-    if mirrored {
-        transforms.append(CGAffineTransform(translationX: artworkDesignSize.width, y: 0).scaledBy(x: -1, y: 1))
-    }
-    transforms.append(CGAffineTransform(scaleX: rect.width / artworkDesignSize.width, y: rect.height / artworkDesignSize.height))
-    transforms.append(CGAffineTransform(translationX: rect.minX, y: rect.minY))
-    return transforms
-}
-
-struct EarbudShape: Shape {
-    var mirrored: Bool = false
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        // Body only: the part that sits in the ear concha. The stem is drawn separately behind it.
-        path.addEllipse(in: CGRect(x: 9, y: 6, width: 26, height: 23))
-        var result = path
-        for transform in artworkTransform(in: rect, mirrored: mirrored) {
-            result = result.applying(transform)
-        }
-        return result
-    }
-}
-
-/// The silicone ear tip: a slightly offset capsule.
-struct EarbudTipShape: Shape {
-    var mirrored: Bool = false
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addEllipse(in: CGRect(x: 22, y: 3, width: 14, height: 15))
-        var result = path
-        for transform in artworkTransform(in: rect, mirrored: mirrored) {
-            result = result.applying(transform)
-        }
-        return result
-    }
-}
-
+/// Original vector artwork, refined against the approved concept. No screenshot, wallpaper,
+/// text, or controls are baked into assets; the shells stay sharp at every backing scale.
 struct EarbudArtwork: View {
     var kind: ArtworkKind
+    var width: CGFloat = 44
+    var height: CGFloat = 44
 
     var body: some View {
         ZStack {
-            switch kind {
-            case .earbudLeft, .earbudRight:
-                let mirrored = kind == .earbudRight
-                // Order matters and each part is opaque: the stem sits behind, the bud in front,
-                // and nothing is stroked across parts (that is what drew crossing lines).
-                StemArtwork(mirrored: mirrored)
-                    .fill(metalGradient)
-                    .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
-                EarbudTipShape(mirrored: mirrored)
-                    .fill(tipGradient)
-                    .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
-                EarbudShape(mirrored: mirrored)
-                    .fill(bodyGradient)
-                    .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
-                // Thin metal collar on the stem.
-                Capsule()
-                    .fill(collarGradient)
-                    .frame(width: 9, height: 2)
-                    .offset(x: mirrored ? 4 : -4, y: 7)
-                // Sound port and microphone hole.
-                Circle()
-                    .fill(Color.black.opacity(0.62))
-                    .frame(width: 3.2, height: 3.2)
-                    .offset(x: mirrored ? 4.4 : -4.4, y: -1)
-                Circle()
-                    .fill(Color.black.opacity(0.45))
-                    .frame(width: 2.2, height: 2.2)
-                    .offset(x: mirrored ? 4.2 : -4.2, y: 14)
-            case .chargingCase:
-                // Explicit dimensions keep the case inside the artwork cell; the lid and
-                // indicator are overlays so they cannot expand the stack's layout bounds.
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(caseGradient)
-                    .frame(width: 38, height: 30)
-                    .overlay {
-                        VStack(spacing: 5) {
-                            Rectangle().fill(Color.black.opacity(0.2))
-                                .frame(width: 32, height: 0.7)
-                            Circle().fill(Color.black.opacity(0.35))
-                                .frame(width: 2.5, height: 2.5)
-                        }
-                        .offset(y: -1)
-                    }
-                    .shadow(color: .black.opacity(0.1), radius: 1.5, x: 0, y: 1)
+            if kind == .chargingCase { chargingCase } else { earbud }
+        }
+        .frame(width: 72, height: 66)
+        .scaleEffect(x: width / 72, y: height / 66)
+        .frame(width: width, height: height)
+        .accessibilityHidden(true)
+    }
+
+    private var earbud: some View {
+        ZStack {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.94), Color(white: 0.99), Color(red: 0.74, green: 0.76, blue: 0.8)],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: 16, height: 36).rotationEffect(.degrees(-7)).offset(x: -3, y: 11)
+                    .shadow(color: .black.opacity(0.12), radius: 2.5, y: 3)
+                Ellipse()
+                    .fill(LinearGradient(colors: [Color(white: 0.52), Color(white: 0.78)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 23, height: 21).rotationEffect(.degrees(25)).offset(x: 7, y: -20)
+                Ellipse()
+                    .fill(LinearGradient(stops: [.init(color: .white, location: 0),
+                                                .init(color: Color(red: 0.93, green: 0.94, blue: 0.96), location: 0.5),
+                                                .init(color: Color(red: 0.75, green: 0.78, blue: 0.83), location: 1)],
+                                         startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 38, height: 34).rotationEffect(.degrees(-30)).offset(x: -1, y: -11)
+                    .shadow(color: .black.opacity(0.09), radius: 2.5, y: 2)
+                Ellipse().fill(.white.opacity(0.35))
+                    .frame(width: 17, height: 27).rotationEffect(.degrees(28)).offset(x: -11, y: -12)
+                    .blur(radius: 1.5)
+                Ellipse()
+                    .fill(LinearGradient(colors: [Color(red: 0.68, green: 0.71, blue: 0.76).opacity(0.64), .white.opacity(0.25)],
+                                         startPoint: .topTrailing, endPoint: .bottomLeading))
+                    .frame(width: 20, height: 18).rotationEffect(.degrees(25)).offset(x: 6, y: -20)
+                Circle().fill(Color(red: 0.18, green: 0.2, blue: 0.26)).frame(width: 4.2, height: 4.2)
+                    .offset(x: -7, y: -3)
+                Capsule().fill(LinearGradient(colors: [Color(white: 0.65), .white], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 10, height: 1.5).rotationEffect(.degrees(-7)).offset(x: -4, y: 8)
+                Capsule().fill(.white.opacity(0.7)).frame(width: 1.1, height: 18)
+                    .rotationEffect(.degrees(-7)).offset(x: -9, y: 19)
             }
+            .scaleEffect(x: kind == .earbudRight ? -1 : 1, y: 1)
+            Text(kind == .earbudRight ? "R" : "L")
+                .font(.system(size: 5.5, weight: .semibold))
+                .foregroundStyle(Color(white: 0.51))
+                .rotationEffect(.degrees(kind == .earbudRight ? 7 : -7))
+                .offset(x: kind == .earbudRight ? 1.5 : -1.5, y: 22)
         }
-        .frame(width: PanelMetrics.artworkWidth, height: PanelMetrics.artworkHeight)
-        .clipped()
     }
 
-    /// Opaque near-white body so it reads as a solid earbud, not a transparent line drawing.
-    private var bodyGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(nsColor: .white),
-                Color(nsColor: .systemGray).opacity(0.55),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    /// Silicone tip: light grey, slightly darker than the shell.
-    private var tipGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(nsColor: .systemGray).opacity(0.75),
-                Color(nsColor: .systemGray).opacity(0.45),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    /// Brushed-metal stem.
-    private var metalGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(nsColor: .white).opacity(0.98),
-                Color(nsColor: .systemGray).opacity(0.7),
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
-    private var collarGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(nsColor: .white).opacity(0.95),
-                Color(nsColor: .systemGray).opacity(0.8),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    private var caseGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(nsColor: .white),
-                Color(red: 0.77, green: 0.78, blue: 0.80),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    private var chargingCase: some View {
+        RoundedRectangle(cornerRadius: 17, style: .continuous)
+            .fill(LinearGradient(stops: [
+                .init(color: Color(white: 0.995), location: 0),
+                .init(color: Color(red: 0.95, green: 0.96, blue: 0.98), location: 0.45),
+                .init(color: Color(red: 0.78, green: 0.8, blue: 0.85), location: 1)
+            ], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: 67, height: 49)
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: 17).stroke(.white.opacity(0.18), lineWidth: 0.4)
+            }
+            .overlay {
+                Rectangle().fill(Color(red: 0.5, green: 0.54, blue: 0.62).opacity(0.65))
+                    .frame(width: 55, height: 0.6).offset(y: -8)
+                Circle().fill(Color(red: 0.34, green: 0.38, blue: 0.46))
+                    .frame(width: 2.5, height: 2.5).offset(y: 5)
+            }
+            .shadow(color: .black.opacity(0.14), radius: 3, x: 0, y: 4)
+            .offset(y: -1)
     }
 }
 
-/// The stem on its own, so it can sit behind the bud without a shared outline.
-struct StemArtwork: Shape {
-    var mirrored: Bool = false
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: 14.5, y: 22))
-        path.addCurve(to: CGPoint(x: 15.5, y: 40), control1: CGPoint(x: 13.5, y: 29), control2: CGPoint(x: 13.5, y: 36))
-        path.addCurve(to: CGPoint(x: 25.5, y: 40), control1: CGPoint(x: 17.5, y: 43.5), control2: CGPoint(x: 23.5, y: 43.5))
-        path.addCurve(to: CGPoint(x: 24, y: 22), control1: CGPoint(x: 27, y: 36), control2: CGPoint(x: 25.5, y: 29))
-        path.closeSubpath()
-        var result = path
-        for transform in artworkTransform(in: rect, mirrored: mirrored) {
-            result = result.applying(transform)
-        }
-        return result
-    }
-}
-
-/// Small battery outline with a proportional fill. Green only when a real capacity is known;
-/// unknown is a hollow grey outline, never a fake level.
+/// A nil capacity is hollow; a genuine zero capacity has no artificial minimum fill.
 struct BatteryGlyph: View {
     var level: Int?
     var charging: Bool
-
     var body: some View {
-        HStack(spacing: 13) {
-            HStack(spacing: 1) {
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                        .strokeBorder(strokeColor, lineWidth: 1)
-                        .frame(width: 17, height: 9)
-                    if let level {
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                            .fill(fillColor)
-                            .frame(width: max(2, 15 * CGFloat(max(0, min(100, level))) / 100), height: 5)
-                            .padding(.leading, 1)
-                    }
+        HStack(spacing: 0.8) {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2.4).strokeBorder(PanelPalette.secondaryText, lineWidth: 1)
+                    .frame(width: 18, height: 9)
+                if let level, level > 0 {
+                    RoundedRectangle(cornerRadius: 1.2)
+                        .fill(level <= 10 ? PanelPalette.warning : PanelPalette.connected)
+                        .frame(width: 14 * CGFloat(min(100, level)) / 100, height: 5)
+                        .padding(.leading, 2)
                 }
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(strokeColor)
-                    .frame(width: 1.6, height: 4)
             }
-            .overlay(alignment: .center) {
-                if charging {
-                    Image(systemName: SymbolAvailability.bolt)
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(PanelPalette.connected)
-                        .offset(x: -1)
-                }
+            Capsule().fill(PanelPalette.secondaryText).frame(width: 1.4, height: 3.5)
+        }
+        .frame(width: 21, height: 10)
+        .overlay {
+            if charging {
+                Image(systemName: SymbolAvailability.bolt).font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(PanelPalette.primaryText).offset(x: -1)
             }
         }
-        .frame(width: 20, height: 10)
-    }
-
-    private var strokeColor: Color {
-        level == nil ? PanelPalette.tertiaryText : PanelPalette.secondaryText
-    }
-
-    private var fillColor: Color {
-        level == nil ? Color.clear : PanelPalette.connected
+        .accessibilityHidden(true)
     }
 }

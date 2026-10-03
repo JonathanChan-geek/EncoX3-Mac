@@ -40,6 +40,25 @@ if CLIRunner.handles(arguments) {
     exit(CLIRunner.run(arguments: arguments))
 }
 
+// Offline previews are handled before constructing the Bluetooth-backed application delegate.
+if let argument = arguments.first(where: { $0.hasPrefix("--render-previews=") }) {
+    let path = String(argument.dropFirst("--render-previews=".count))
+    guard !path.isEmpty else { exit(2) }
+    _ = NSApplication.shared
+    do { try MainActor.assumeIsolated { try PanelPreviewController.renderAll(to: URL(fileURLWithPath: path)) }; exit(0) }
+    catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
+}
+if let argument = arguments.first(where: { $0.hasPrefix("--preview=") }) {
+    let state = String(argument.dropFirst("--preview=".count))
+    guard PanelPreviewController.states.contains(state) else { exit(2) }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    let appearance: PanelAppearance = state == "dark" ? .dark : .light
+    let preview = MainActor.assumeIsolated { PanelPreviewController(state: state, appearance: appearance) }
+    withExtendedLifetime(preview) { app.run() }
+    exit(0)
+}
+
 // Both opt-in flags are accepted for compatibility only: the noise-reduction values, the six
 // equalizer presets and the three spatial modes were each accepted by the device with an exact
 // readback, so they are available by default. The gates that remain are the live ones: channel

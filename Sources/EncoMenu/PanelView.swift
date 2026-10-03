@@ -1,356 +1,345 @@
 import SwiftUI
 
-/// The panel itself. Pure rendering of `PanelSnapshot`: no state, no property wrappers, no
-/// observation macros. Every affordance is a plain, self-drawn button or a real menu; nothing in
-/// here can write to the device on its own.
+/// Pure presentation. Expanded state and all writes belong to the manager; only an explicit
+/// option activation invokes a write. Selection always comes back from the device snapshot.
 struct PanelView: View {
     let snapshot: PanelSnapshot
     let actions: PanelActions
-    /// Plain value (no property wrapper): nil means follow the system appearance.
     let appearance: PanelAppearance
+    var usesMaterial: Bool = true
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             content
         }
-        // One fixed frame for the whole panel; the background fills it, so no grey strips appear
-        // at the sides from a second, narrower frame around the padded content.
-        .frame(width: PanelMetrics.width, height: PanelMetrics.height)
-        .background(PanelPalette.window)
+        .frame(width: PanelMetrics.width,
+               height: snapshot.viewportHeight ?? PanelMetrics.contentHeight(for: snapshot))
+        .background(PanelSurface(anchorX: snapshot.anchorX, material: usesMaterial))
+        .clipShape(PopoverSilhouette(anchorX: snapshot.anchorX))
         .preferredColorScheme(appearance.colorScheme)
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: PanelMetrics.spacing) {
-            topBar
-            batteryBlock
-            noiseCard
-            audioCard
-            if !snapshot.devices.isEmpty {
-                deviceCard
-            }
-            // Footer and the reserved message strip travel together with a tight gap, so the
-            // panel stays inside PanelMetrics.height while a message can still be shown.
-            VStack(alignment: .leading, spacing: 2) {
-                bottomBar
-                errorSlot
-            }
-        }
-        .padding(PanelMetrics.margin)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Fixed-height strip under the footer: empty in normal use, so nothing moves when a short
-    /// problem message appears, and it can never overlap the footer.
-    private var errorSlot: some View {
-        Group {
-            if let error = snapshot.errorLine {
+        VStack(alignment: .leading, spacing: 0) {
+            topBar.frame(height: 36)
+            batteryBlock.padding(.top, 18)
+            separator.padding(.top, 12)
+            noiseControls.padding(.top, 14)
+            audioCard.padding(.top, 14).padding(.horizontal, -8)
+            bottomBar.padding(.top, 14)
+            if let error = snapshot.visibleError {
                 Text(error)
-                    .font(PanelFonts.caption)
+                    .font(PanelFonts.micro)
                     .foregroundStyle(PanelPalette.warning)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-            } else {
-                Text(" ")
-                    .font(PanelFonts.caption)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                    .help(error)
+                    .accessibilityLabel("状态提示：\(error)")
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: PanelMetrics.errorSlotHeight, alignment: .leading)
+        .padding(.horizontal, PanelMetrics.margin)
+        .padding(.top, 29)
+        .padding(.bottom, 12)
     }
 
-    // MARK: - Top bar
+    private var separator: some View {
+        Rectangle().fill(PanelPalette.divider).frame(height: 0.5)
+    }
 
     private var topBar: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(snapshot.brand)
-                    .font(PanelFonts.brand)
-                    .foregroundStyle(PanelPalette.tertiaryText)
-                    .tracking(0.6)
-                Text(snapshot.title)
-                    .font(PanelFonts.title)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(snapshot.brand).font(PanelFonts.brand).foregroundStyle(PanelPalette.secondaryText)
+                Text(snapshot.title).font(PanelFonts.title).foregroundStyle(PanelPalette.primaryText)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                if snapshot.connecting && !snapshot.connectionOK {
+                    ProgressView().controlSize(.mini).scaleEffect(0.75).frame(width: 9, height: 9)
+                } else {
+                    Circle().fill(snapshot.connectionOK ? PanelPalette.connected : PanelPalette.disconnected)
+                        .frame(width: 7, height: 7)
+                }
+                Text(snapshot.displayedConnection).font(PanelFonts.caption)
                     .foregroundStyle(PanelPalette.primaryText)
             }
-            Spacer(minLength: 8)
-            statusPill
-            moreMenu
+            .padding(.top, 3)
+            .accessibilityElement(children: .combine)
+            moreMenu.padding(.top, 1)
         }
-        .frame(height: PanelMetrics.topBarHeight, alignment: .top)
-    }
-
-    private var statusPill: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(snapshot.connectionOK ? PanelPalette.connected : PanelPalette.disconnected)
-                .frame(width: 7, height: 7)
-            Text(snapshot.connectionText)
-                .font(PanelFonts.caption)
-                .foregroundStyle(snapshot.connectionOK ? PanelPalette.primaryText : PanelPalette.secondaryText)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(Capsule().fill(PanelPalette.quietFill))
-        .padding(.top, 3)
     }
 
     private var moreMenu: some View {
         Menu {
-            Button("日常体验与快捷键…") { actions.onExperience() }
-            Divider()
-            Button("刷新") { actions.onRefresh() }
-            Toggle("连接时显示电量卡片", isOn: Binding(
-                get: { snapshot.connectionNoticesEnabled },
-                set: { _ in actions.onToggleConnectionNotice() }
-            ))
-            Button("显示电量卡片") { actions.onPreviewConnectionNotice() }
-                .disabled(!snapshot.connectionOK)
-            Button("关于 Enco X3") { actions.onAbout() }
-            if snapshot.showSettingsButton {
+            if !snapshot.devices.isEmpty {
+                Menu("双设备连接") {
+                    ForEach(snapshot.devices, id: \.id) { device in
+                        Label("\(device.name) · \(device.stateText)", systemImage: device.symbol)
+                    }
+                }
                 Divider()
-                Button("打开系统设置…") { actions.onOpenSettings() }
+            }
+            Button("日常体验与快捷键…", action: actions.onExperience)
+            Divider()
+            Button("刷新", action: actions.onRefresh).disabled(snapshot.busy)
+            Toggle("连接时显示电量卡片", isOn: Binding(
+                get: { snapshot.connectionNoticesEnabled }, set: { _ in actions.onToggleConnectionNotice() }
+            ))
+            Button("显示电量卡片", action: actions.onPreviewConnectionNotice).disabled(!snapshot.connectionOK)
+            Button("关于 Enco X3", action: actions.onAbout)
+            if snapshot.showSettingsButton {
+                Button("打开系统设置…", action: actions.onOpenSettings)
             }
             Divider()
-            Button("退出") { actions.onQuit() }
+            Button("退出", action: actions.onQuit)
         } label: {
             Image(systemName: SymbolAvailability.more)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(PanelPalette.primaryText)
+                .frame(width: 18, height: 16)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .buttonStyle(CircleIconButtonStyle())
-        .fixedSize()
-        .help("更多")
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("更多").accessibilityLabel("更多")
     }
-
-    // MARK: - Battery
 
     private var batteryBlock: some View {
         HStack(spacing: 0) {
             ForEach(snapshot.batteries, id: \.title) { battery in
-                VStack(spacing: PanelMetrics.batteryRowGap) {
-                    EarbudArtwork(kind: battery.kind)
-                    Text(battery.title)
-                        .font(PanelFonts.micro)
-                        .foregroundStyle(PanelPalette.secondaryText)
-                        .frame(height: PanelMetrics.batteryLabelHeight)
-                    HStack(spacing: 4) {
-                        Text(battery.value)
-                            .font(PanelFonts.value)
-                            .foregroundStyle(battery.level == nil || battery.isStale
-                                             ? PanelPalette.secondaryText
-                                             : PanelPalette.primaryText)
-                        BatteryGlyph(level: battery.isStale ? nil : battery.level, charging: battery.charging)
-                        if battery.isStale && battery.level != nil {
-                            Image(systemName: SymbolAvailability.refresh)
-                                .font(.system(size: 8))
-                                .foregroundStyle(PanelPalette.warning)
-                                .help("读数待刷新")
-                        }
+                VStack(spacing: 0) {
+                    EarbudArtwork(kind: battery.kind, width: 72, height: 66)
+                    Text(battery.title).font(PanelFonts.body)
+                        .foregroundStyle(PanelPalette.primaryText)
+                        .frame(height: 17).padding(.top, 9)
+                    HStack(spacing: 6) {
+                        BatteryGlyph(level: battery.isStale ? nil : battery.level,
+                                     charging: !battery.isStale && battery.charging)
+                        Text(battery.isStale || battery.level == nil ? "—" : battery.value)
+                            .font(PanelFonts.value).monospacedDigit()
+                            .foregroundStyle(PanelPalette.primaryText)
                     }
-                    .frame(height: PanelMetrics.batteryValueHeight)
+                    .frame(height: 18).padding(.top, 6)
                 }
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
-                .help(battery.help ?? "")
+                .accessibilityElement(children: .combine)
+                .help(battery.help ?? (battery.isStale ? "读数待刷新" : ""))
             }
         }
-        .frame(height: PanelMetrics.batteryBlockHeight)
-        .frame(maxWidth: .infinity)
+        .frame(height: 116)
     }
 
-    // MARK: - Noise control
-
-    private var noiseCard: some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: PanelMetrics.noiseCardSpacing) {
-                HStack {
-                    Text("噪声控制").font(PanelFonts.section).foregroundStyle(PanelPalette.secondaryText)
-                    Spacer()
-                    Text(snapshot.noiseCurrentText)
-                        .font(PanelFonts.caption)
-                        .foregroundStyle(PanelPalette.secondaryText)
-                }
-
-                HStack(spacing: 0) {
-                    ForEach(snapshot.modeControls, id: \.id) { control in
-                        modeButton(control)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("降噪强度").font(PanelFonts.micro).foregroundStyle(PanelPalette.secondaryText)
-                    levelSegments
-                }
+    private var noiseControls: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("噪声控制").font(PanelFonts.section).foregroundStyle(PanelPalette.primaryText)
+                .frame(height: 18)
+            HStack(spacing: 8) {
+                ForEach(snapshot.modeControls, id: \.id) { control in modeButton(control) }
             }
+            .padding(.top, 8)
+            Text("降噪强度").font(PanelFonts.caption).foregroundStyle(PanelPalette.secondaryText)
+                .frame(height: 14).padding(.top, 14)
+            levelSegments.padding(.top, 6)
         }
     }
 
     private func modeButton(_ control: PanelSnapshot.ModeControl) -> some View {
-        Button {
-            actions.onNoise(UInt32(control.value))
-        } label: {
-            VStack(spacing: 5) {
-                ZStack {
-                    Circle()
-                        .fill(control.isSelected ? PanelPalette.accent : PanelPalette.quietFill)
-                        .frame(width: PanelMetrics.modeIconSize, height: PanelMetrics.modeIconSize)
-                    Image(systemName: control.symbol)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(control.isSelected ? Color.white : PanelPalette.primaryText)
-                }
-                .overlay {
-                    if control.isSelected {
-                        Circle()
-                            .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5)
-                            .frame(width: PanelMetrics.modeIconSize - 5, height: PanelMetrics.modeIconSize - 5)
-                    }
-                }
-                Text(control.title)
-                    .font(PanelFonts.caption)
-                    .foregroundStyle(control.isSelected ? PanelPalette.primaryText : PanelPalette.secondaryText)
+        let selected = snapshot.connectionOK && control.isSelected
+        return Button { actions.onNoise(UInt32(control.value)) } label: {
+            VStack(spacing: 10) {
+                Image(systemName: control.symbol).font(.system(size: 23, weight: .regular))
+                    .frame(height: 27)
+                Text(control.title).font(PanelFonts.caption)
             }
-            .frame(maxWidth: .infinity, minHeight: PanelMetrics.modeTapHeight)
-            .contentShape(Rectangle())
+            .foregroundStyle(selected ? .white : (snapshot.noiseEnabled ? PanelPalette.primaryText : PanelPalette.tertiaryText))
+            .frame(maxWidth: .infinity).frame(height: 72)
+            .background(selected ? PanelPalette.accent : PanelPalette.quietFill,
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 11))
         }
-        .buttonStyle(SoftPressStyle(cornerRadius: 12))
+        .buttonStyle(SoftPressStyle(cornerRadius: 11))
+        .modifier(PanelHover(enabled: snapshot.noiseEnabled, radius: 11))
         .disabled(!snapshot.noiseEnabled)
-        .help(control.help)
+        .help(snapshot.noiseDisabledReason ?? control.help)
+        .accessibilityLabel(control.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// One continuous four-segment bar instead of scattered small buttons.
     private var levelSegments: some View {
         HStack(spacing: 0) {
             ForEach(Array(snapshot.levels.enumerated()), id: \.element.id) { index, level in
-                Button {
-                    actions.onNoise(UInt32(level.value))
-                } label: {
+                let selected = snapshot.connectionOK && level.isSelected
+                Button { actions.onNoise(UInt32(level.value)) } label: {
                     Text(level.title)
-                        .font(PanelFonts.caption)
-                        .foregroundStyle(level.isSelected ? Color.white : PanelPalette.primaryText)
-                        .frame(maxWidth: .infinity, minHeight: PanelMetrics.levelSegmentHeight)
-                        .background(level.isSelected ? PanelPalette.accent : Color.clear)
+                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(snapshot.levelsEnabled ? PanelPalette.primaryText : PanelPalette.tertiaryText)
+                        .frame(maxWidth: .infinity).frame(height: 29)
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(PanelPalette.selectedSegment)
+                                    .shadow(color: .black.opacity(0.09), radius: 2, y: 1)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(SoftPressStyle(cornerRadius: 7))
+                .buttonStyle(SoftPressStyle(cornerRadius: 9, pressedScale: 1))
                 .disabled(!snapshot.levelsEnabled)
+                .accessibilityAddTraits(selected ? .isSelected : [])
                 .overlay(alignment: .leading) {
-                    if index > 0 {
-                        Rectangle()
-                            .fill(PanelPalette.divider)
-                            .frame(width: PanelMetrics.hairline)
+                    if index > 0 && !selected && !(snapshot.connectionOK && snapshot.levels[index - 1].isSelected) {
+                        Rectangle().fill(PanelPalette.divider).frame(width: 0.5, height: 18)
                     }
                 }
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(PanelPalette.quietFill)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(1.5)
+        .background(PanelPalette.quietFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .frame(height: 32)
     }
-
-    // MARK: - Sound
 
     private var audioCard: some View {
-        PanelCard(padding: 0) {
-            VStack(spacing: 0) {
-                menuRow(snapshot.equalizerRow, action: actions.onEqualizerMenu)
-                Rectangle()
-                    .fill(PanelPalette.divider)
-                    .frame(height: PanelMetrics.hairline)
-                    .padding(.leading, PanelMetrics.innerPadding + 26)
-                menuRow(snapshot.spatialRow, action: actions.onSpatialMenu)
-            }
+        VStack(spacing: 0) {
+            audioSection(snapshot.equalizerRow, toggle: actions.onEqualizerMenu, select: actions.onEqualizer)
+            separator.padding(.horizontal, 14)
+            audioSection(snapshot.spatialRow, toggle: actions.onSpatialMenu, select: actions.onSpatial)
         }
+        .background(PanelPalette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func menuRow(_ row: PanelSnapshot.MenuRow, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(tintColor(row.tint).opacity(0.16))
-                        .frame(width: 26, height: 26)
-                    Image(systemName: row.symbol)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(tintColor(row.tint))
+    private func audioSection(_ row: PanelSnapshot.MenuRow, toggle: @escaping () -> Void,
+                              select: @escaping (Int) -> Void) -> some View {
+        let expanded = snapshot.expandedAudioRow == row.id
+        return VStack(spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 12) {
+                    Image(systemName: row.symbol).font(.system(size: 19, weight: .regular))
+                        .frame(width: 24)
+                    Text(row.title).font(PanelFonts.body)
+                    Spacer(minLength: 4)
+                    Text(snapshot.connectionOK && row.currentText != "未知" ? row.currentText : "—")
+                        .font(PanelFonts.caption).foregroundStyle(PanelPalette.secondaryText)
+                        .lineLimit(1)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.right")
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(PanelPalette.tertiaryText)
                 }
-                Text(row.title)
-                    .font(PanelFonts.body)
-                    .foregroundStyle(PanelPalette.primaryText)
-                Spacer(minLength: 8)
-                Text(row.currentText)
-                    .font(PanelFonts.body)
-                    .foregroundStyle(PanelPalette.secondaryText)
-                    .lineLimit(1)
-                Image(systemName: SymbolAvailability.chevronDown)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(PanelPalette.tertiaryText)
+                .foregroundStyle(PanelPalette.primaryText)
+                .padding(.horizontal, 14).frame(height: PanelMetrics.rowHeight)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, PanelMetrics.innerPadding)
-            .frame(height: PanelMetrics.rowHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SoftPressStyle(cornerRadius: 10))
-        .disabled(!row.enabled)
-        .help(row.help)
-        .accessibilityLabel("\(row.title)，\(row.currentText)")
-    }
-
-    private func tintColor(_ tint: PanelSnapshot.MenuRowTint) -> Color {
-        switch tint {
-        case .equalizer: return PanelPalette.equalizerTint
-        case .spatial: return PanelPalette.spatialTint
-        }
-    }
-
-    // MARK: - Devices
-
-    private var deviceCard: some View {
-        PanelCard(fill: PanelPalette.quietFill) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("双设备连接").font(PanelFonts.section).foregroundStyle(PanelPalette.secondaryText)
-                ForEach(snapshot.devices, id: \.id) { device in
-                    HStack(spacing: 8) {
-                        Image(systemName: device.symbol)
-                            .font(.system(size: 11))
-                            .foregroundStyle(PanelPalette.secondaryText)
-                        Text(device.name)
-                            .font(PanelFonts.body)
-                            .foregroundStyle(PanelPalette.primaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer(minLength: 8)
-                        Circle()
-                            .fill(device.isConnected ? PanelPalette.connected : PanelPalette.disconnected)
-                            .frame(width: 6, height: 6)
-                        Text(device.stateText)
-                            .font(PanelFonts.micro)
-                            .foregroundStyle(PanelPalette.secondaryText)
+            .buttonStyle(SoftPressStyle(pressedScale: 1))
+            .modifier(PanelHover(enabled: row.enabled, radius: 12))
+            .disabled(!row.enabled)
+            .help(row.help)
+            .accessibilityLabel("\(row.title)，\(row.currentText)，\(expanded ? "已展开" : "展开选项")")
+            if expanded {
+                ForEach(row.options, id: \.id) { option in
+                    Button { select(option.value) } label: {
+                        HStack(spacing: 12) {
+                            if row.id == "spatial" {
+                                Image(systemName: spatialSymbol(option.value)).font(.system(size: 17))
+                                    .frame(width: 24)
+                            }
+                            Text(option.title).font(PanelFonts.caption)
+                            Spacer()
+                            if option.isSelected {
+                                Image(systemName: SymbolAvailability.check).font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(PanelPalette.accent)
+                            }
+                        }
+                        .foregroundStyle(PanelPalette.primaryText)
+                        .padding(.horizontal, 14).frame(height: PanelMetrics.optionHeight)
+                        .contentShape(Rectangle())
+                        .overlay(alignment: .top) { separator.padding(.horizontal, 14) }
                     }
-                    .frame(height: PanelMetrics.deviceRowHeight)
+                    .buttonStyle(SoftPressStyle(pressedScale: 1))
+                    .modifier(PanelHover(enabled: row.enabled, radius: 6))
+                    .disabled(!row.enabled)
+                    .accessibilityAddTraits(option.isSelected ? .isSelected : [])
                 }
             }
         }
     }
 
-    // MARK: - Bottom bar
+    private func spatialSymbol(_ value: Int) -> String {
+        switch value { case 0: return SymbolAvailability.noiseOff; case 1: return "globe"; default: return SymbolAvailability.spatial }
+    }
 
     private var bottomBar: some View {
-        HStack {
-            Text(snapshot.lastUpdateText)
-                .font(PanelFonts.micro)
-                .foregroundStyle(PanelPalette.tertiaryText)
-            Spacer()
-            Button {
-                actions.onRefresh()
-            } label: {
-                Image(systemName: SymbolAvailability.refresh)
+        HStack(spacing: 10) {
+            if snapshot.connecting && !snapshot.connectionOK {
+                ProgressView().controlSize(.small).frame(width: 16, height: 18)
+            } else {
+                BluetoothMark().stroke(snapshot.connectionOK ? PanelPalette.accent : PanelPalette.tertiaryText,
+                                       style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+                    .frame(width: 14, height: 20)
             }
-            .buttonStyle(CircleIconButtonStyle())
-            .disabled(snapshot.busy)
-            .help("重新读取耳机状态")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(snapshot.connectionOK ? "已连接到 Mac" : (snapshot.connecting ? "正在连接耳机…" : "耳机未连接"))
+                    .font(PanelFonts.caption).foregroundStyle(PanelPalette.secondaryText)
+                if !snapshot.connectionOK && !snapshot.connecting {
+                    Text("连接后可查看电量和设置").font(.system(size: 9)).foregroundStyle(PanelPalette.tertiaryText)
+                }
+            }
+            Spacer(minLength: 0)
+            if !snapshot.connectionOK && !snapshot.connecting {
+                Button("重新连接", action: actions.onRefresh)
+                    .font(.system(size: 11)).foregroundStyle(PanelPalette.accent)
+                    .buttonStyle(.plain).disabled(snapshot.busy)
+            }
+            Button(action: actions.onRefresh) { Image(systemName: SymbolAvailability.refresh) }
+                .buttonStyle(CircleIconButtonStyle()).disabled(snapshot.busy)
+                .help("重新读取耳机状态").accessibilityLabel("刷新耳机状态")
         }
-        .frame(height: PanelMetrics.footerHeight)
+        .frame(height: 24)
+        .help(snapshot.lastUpdateText)
+    }
+}
+
+private struct PanelHover: ViewModifier {
+    var enabled: Bool
+    var radius: CGFloat
+    func body(content: Content) -> some View {
+        content.overlay(HoverTrackingView(enabled: enabled, radius: radius).accessibilityHidden(true))
+    }
+}
+
+/// AppKit tracking avoids requiring SwiftUI's newer State macro plugin in the CLT-only build.
+private struct HoverTrackingView: NSViewRepresentable {
+    var enabled: Bool
+    var radius: CGFloat
+    func makeNSView(context: Context) -> TrackingView { TrackingView() }
+    func updateNSView(_ view: TrackingView, context: Context) {
+        view.enabled = enabled
+        view.wantsLayer = true
+        view.layer?.cornerRadius = radius
+        if !enabled { view.layer?.backgroundColor = nil }
+    }
+    final class TrackingView: NSView {
+        var enabled = true
+        private var tracking: NSTrackingArea?
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+            addTrackingArea(area)
+            tracking = area
+        }
+        override func mouseEntered(with event: NSEvent) {
+            if enabled { layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.055).cgColor }
+        }
+        override func mouseExited(with event: NSEvent) { layer?.backgroundColor = nil }
+    }
+}
+
+struct BluetoothMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: 0.1 * rect.width, y: 0.22 * rect.height))
+        p.addLine(to: CGPoint(x: 0.88 * rect.width, y: 0.72 * rect.height))
+        p.addLine(to: CGPoint(x: 0.48 * rect.width, y: 0.98 * rect.height))
+        p.addLine(to: CGPoint(x: 0.48 * rect.width, y: 0.02 * rect.height))
+        p.addLine(to: CGPoint(x: 0.88 * rect.width, y: 0.28 * rect.height))
+        p.addLine(to: CGPoint(x: 0.1 * rect.width, y: 0.78 * rect.height))
+        return p
     }
 }

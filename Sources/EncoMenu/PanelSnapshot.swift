@@ -36,7 +36,7 @@ struct PanelSnapshot {
         var help: String
     }
 
-    /// A row that opens a menu.
+    /// A row that expands its device-backed choices inline.
     struct MenuRow {
         var id: String
         var title: String
@@ -88,6 +88,20 @@ struct PanelSnapshot {
     var busy: Bool
     var showSettingsButton: Bool
     var connectionNoticesEnabled: Bool = true
+    var connecting: Bool = false
+    var expandedAudioRow: String? = nil
+    var anchorX: CGFloat = PanelMetrics.width / 2
+    var viewportHeight: CGFloat? = nil
+
+    /// Reconnect backoff is transport detail, not a persistent orange warning in the design.
+    /// Actual failures and permission problems still receive their own visible message.
+    var visibleError: String? {
+        guard let errorLine, !errorLine.hasPrefix("等待重连") else { return nil }
+        return errorLine
+    }
+
+    var displayedConnection: String { connectionOK ? "已连接" : (connecting ? "连接中" : "未连接") }
+
 
     static func empty() -> PanelSnapshot {
         PanelSnapshot(
@@ -139,4 +153,7 @@ struct PanelActions {
     var onQuit: () -> Void
     var onPreviewConnectionNotice: () -> Void = {}
     var onToggleConnectionNotice: () -> Void = {}
+    var onEqualizer: (Int) -> Void = { _ in }
+    var onSpatial: (Int) -> Void = { _ in }
+
 }

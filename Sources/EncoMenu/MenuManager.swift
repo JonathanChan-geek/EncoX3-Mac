@@ -10,9 +10,9 @@ import IOBluetooth
 /// `PanelSnapshot` and reassigns `hosting.rootView`, which is what makes the panel work
 /// without observation macros.
 @MainActor
-final class MenuManager: NSObject, NSPopoverDelegate {
+final class MenuManager: NSObject {
     private let statusItem: NSStatusItem
-    private let popover = NSPopover()
+    private let popover = MenuPopover()
     private let connectionNotice = ConnectionNotice()
     private var noticePolicy = ConnectionNoticePolicy()
     private var connectionNoticesEnabled = UserDefaults.standard.object(forKey: "connectionNoticesEnabled") as? Bool ?? true
@@ -34,6 +34,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private var transport: RFCOMMTransport?
     private var transactions: TransactionController?
     private var state = DeviceState()
+    private var expandedAudioRow: String?
+    private var panelAnchorX: CGFloat = PanelMetrics.width / 2
     private var snapshot: PanelSnapshot
 
     private var connectionText = "未连接"
@@ -104,9 +106,20 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         }
         hosting.view.frame = NSRect(x: 0, y: 0, width: PanelMetrics.width, height: PanelMetrics.height)
         popover.contentViewController = hosting
+        popover.onLog = { [weak self] in self?.diag($0) }
         popover.contentSize = NSSize(width: PanelMetrics.width, height: PanelMetrics.height)
-        popover.behavior = .transient
-        popover.delegate = self
+        popover.onAnchorChange = { [weak self] x in
+            guard let self else { return }
+            self.panelAnchorX = x
+            self.snapshot.anchorX = x
+            self.renderIntoHost()
+        }
+        popover.onClose = { [weak self] in
+            guard let self, self.expandedAudioRow != nil else { return }
+            self.expandedAudioRow = nil
+            self.snapshot.expandedAudioRow = nil
+            self.renderIntoHost()
+        }
         // The popover and its hosting view do not reliably inherit NSApp.appearance set before
         // launch, so the explicit CLI value is written to both. `.system` leaves them untouched.
         if let nsAppearance = appearance.nsAppearance {
@@ -165,18 +178,16 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         }
     }
 
-    /// Brings the panel up (menu action, first launch, reopen). Activates the app so the panel
-    /// accepts clicks right away; no extra window is created.
+    /// Brings the panel up without waiting for application activation.
     func showPopover() {
         connectionNotice.hide()
         guard !popover.isShown, let button = statusItem.button else { return }
-        NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        diag("panel visible")
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
         let isRightClick = NSApp.currentEvent?.type == .rightMouseUp
+        diag("status item \(isRightClick ? "right" : "left") click shown=\(popover.isShown)")
         if isRightClick {
             showContextMenu()
         } else {
@@ -209,54 +220,16 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         NSApp.terminate(nil)
     }
 
-    // MARK: - Sound row menus (AppKit)
+    // MARK: - Inline sound choices
 
-    /// SwiftUI's `Menu` collapses a custom multi-element label down to bare text on macOS, which
-    /// dropped the icon, the current value and the chevron. The rows are plain buttons instead and
-    /// the menu is a real `NSMenu`, so the custom row keeps its full height and layout.
-    private func popUpEqualizerMenu() {
-        popUpMenu(
-            row: snapshot.equalizerRow,
-            action: #selector(equalizerMenuItemChosen(_:))
-        )
+    private func toggleAudioRow(_ id: String) {
+        let row = id == "eq" ? snapshot.equalizerRow : snapshot.spatialRow
+        guard row.enabled else { return }
+        expandedAudioRow = expandedAudioRow == id ? nil : id
+        snapshot.expandedAudioRow = expandedAudioRow
+        renderIntoHost()
     }
 
-    private func popUpSpatialMenu() {
-        popUpMenu(
-            row: snapshot.spatialRow,
-            action: #selector(spatialMenuItemChosen(_:))
-        )
-    }
-
-    private func popUpMenu(row: PanelSnapshot.MenuRow, action: Selector) {
-        let menu = NSMenu()
-        for option in row.options {
-            let item = NSMenuItem(title: option.title, action: action, keyEquivalent: "")
-            item.target = self
-            item.state = option.isSelected ? .on : .off
-            item.representedObject = option.value
-            menu.addItem(item)
-        }
-        let view = hosting.view
-        let point: NSPoint
-        if let event = NSApp.currentEvent {
-            // Convert the click location into the panel's own coordinates.
-            point = view.convert(event.locationInWindow, from: nil)
-        } else {
-            point = NSPoint(x: view.bounds.midX, y: view.bounds.midY)
-        }
-        menu.popUp(positioning: nil, at: point, in: view)
-    }
-
-    @objc private func equalizerMenuItemChosen(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? Int else { return }
-        performEqualizerWrite(id: id)
-    }
-
-    @objc private func spatialMenuItemChosen(_ sender: NSMenuItem) {
-        guard let type = sender.representedObject as? Int else { return }
-        performSpatialWrite(type: type)
-    }
 
     /// A successful read or write clears the error line; the footer shows the update time instead.
     private func clearError() {
@@ -281,7 +254,6 @@ final class MenuManager: NSObject, NSPopoverDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
-            NSApp.activate(ignoringOtherApps: true)
             showPopover()
             // Opening the panel is an explicit request for current numbers: read everything.
             refresh(withQueries: true, force: true)
@@ -820,7 +792,7 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             let reading = state.battery[slot]
             batteries.append(PanelSnapshot.Battery(
                 title: title,
-                value: reading?.level.map { "\($0)%" } ?? "--",
+                value: reading?.level.map { "\($0)%" } ?? "—",
                 kind: kind,
                 level: reading?.level,
                 charging: reading?.charging ?? false,
@@ -951,8 +923,12 @@ final class MenuManager: NSObject, NSPopoverDelegate {
             errorLine: errorLine ?? warmupNotice,
             busy: isWorking || isConnecting,
             showSettingsButton: showSettingsButton,
-            connectionNoticesEnabled: connectionNoticesEnabled
+            connectionNoticesEnabled: connectionNoticesEnabled,
+            connecting: isConnecting || !ready,
+            expandedAudioRow: transport?.state == .open ? expandedAudioRow : nil,
+            anchorX: panelAnchorX
         )
+        if !snapshot.connectionOK { expandedAudioRow = nil }
         if let button = statusItem.button {
             let percent = [BatterySlot.left, .right].compactMap { state.battery[$0]?.level }.min()
             button.title = showPercentage && batteryFresh && transport?.state == .open ? percent.map { " \($0)%" } ?? "" : ""
@@ -984,8 +960,8 @@ final class MenuManager: NSObject, NSPopoverDelegate {
     private func renderIntoHost() {
         let actions = PanelActions(
             onNoise: { [weak self] bitmap in self?.performWrite(bitmap: bitmap) },
-            onEqualizerMenu: { [weak self] in self?.popUpEqualizerMenu() },
-            onSpatialMenu: { [weak self] in self?.popUpSpatialMenu() },
+            onEqualizerMenu: { [weak self] in self?.toggleAudioRow("eq") },
+            onSpatialMenu: { [weak self] in self?.toggleAudioRow("spatial") },
             onRefresh: { [weak self] in
                 // Explicit user refresh: this is the point where a stale error goes away.
                 self?.clearError()
@@ -1010,13 +986,20 @@ final class MenuManager: NSObject, NSPopoverDelegate {
                 UserDefaults.standard.set(self.connectionNoticesEnabled, forKey: "connectionNoticesEnabled")
                 if !self.connectionNoticesEnabled { self.connectionNotice.hide() }
                 self.render()
-            }
+            },
+            onEqualizer: { [weak self] id in self?.performEqualizerWrite(id: id) },
+            onSpatial: { [weak self] type in self?.performSpatialWrite(type: type) }
         )
         // Re-assert the explicit appearance on every rootView swap; `.system` leaves it alone.
         if let nsAppearance = appearance.nsAppearance {
             hosting.view.appearance = nsAppearance
         }
+        let available = (statusItem.button?.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+        let height = min(PanelMetrics.contentHeight(for: snapshot), available - 24)
+        snapshot.viewportHeight = height
         hosting.rootView = PanelView(snapshot: snapshot, actions: actions, appearance: appearance)
+        hosting.view.setFrameSize(NSSize(width: PanelMetrics.width, height: height))
+        popover.contentSize = NSSize(width: PanelMetrics.width, height: height)
     }
 
     private func presentConnectionNotice() {
